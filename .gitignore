@@ -1,0 +1,46 @@
+# Dependencies and generated assets
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.log
+
+# Machine-specific .NET/IDE output
+host/**/bin/
+host/**/obj/
+*.user
+*.suo
+*.bak
+.vs/
+.idea/
+.vscode/
+
+# Browser profiles, session and personal state
+.user-data/
+**/user-data/
+**/chromium-profile/
+**/chatgpt-profile/
+**/external-chromium-profile/
+**/recurring-job.json
+**/Cookies
+**/Cookies-journal
+**/Local Storage/
+**/Session Storage/
+
+# Local configuration / secrets / credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.pfx
+*.p12
+*.key
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+# Local analysis output
+reports/

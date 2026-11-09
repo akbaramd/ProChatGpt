@@ -1,0 +1,6 @@
+const {chromium}=require('playwright');(async()=>{const b=await chromium.connectOverCDP('http://127.0.0.1:'+process.argv[2]);const p=b.contexts().flatMap(c=>c.pages()).find(x=>{try{return new URL(x.url()).hostname==='chatgpt.com'}catch{return false}});const r=await p.evaluate(()=>{
+const attrs=[...document.querySelectorAll('[data-chatgpt-search-unit-key]')].map((e,i)=>({i,unit:e.getAttribute('data-chatgpt-search-unit-key'),len:e.innerText?.length||0,children:e.children.length,role:e.getAttribute('role'),class:String(e.className).slice(0,80),copy:e.querySelectorAll('button[aria-label="Copy message"]').length,sub:e.querySelectorAll('[class*="MarkdownRoot"]').length}));
+const turn=[...document.querySelectorAll('[data-talvt-turn-state]')].map((e,i)=>({i,state:e.getAttribute('data-talvt-turn-state'),len:e.innerText?.length||0,unit:e.querySelectorAll('[data-chatgpt-search-unit-key]').length,children:e.children.length,role:e.getAttribute('role')}));
+const nodes=[...document.querySelectorAll('[class*="activity-header"]')].map(e=>({len:e.innerText?.length,el:e.tagName}));
+return {attrs:attrs.slice(0,18),turn:turn.slice(0,12),thinkingNodes:nodes.slice(-5),count:{unit:attrs.length,turn:turn.length}};
+});console.log(JSON.stringify(r,null,2));process.exit(0);})().catch(e=>{console.error(e.message);process.exit(1)});

@@ -1,0 +1,5 @@
+const {chromium}=require('playwright');(async()=>{
+const b=await chromium.connectOverCDP('http://127.0.0.1:'+process.argv[2]);const p=b.contexts().flatMap(c=>c.pages()).find(x=>{try{return new URL(x.url()).hostname==='chatgpt.com'}catch{return false}});
+const r=await p.evaluate(()=>({path:location.pathname,units:[...document.querySelectorAll('[data-chatgpt-search-unit-key]')].map(n=>({key:n.getAttribute('data-chatgpt-search-unit-key'),full:n.innerText?.slice(0,220),markdown:[...n.querySelectorAll('[class*="MarkdownRoot"]')].map(e=>e.innerText?.slice(0,150)),child:[...n.children].map(x=>({cls:typeof x.className==='string'?x.className.slice(0,90):'',text:x.innerText?.slice(0,100)}))})),sidebar:document.querySelectorAll('a[href^="/c/"]').length}));
+console.log(JSON.stringify(r,null,2));process.exit(0);
+})().catch(e=>{console.error(e.message);process.exit(1)});
