@@ -19,3 +19,9 @@ test('all referenced runtime files exist with narrow host permissions',()=>{
   ['https://chat.openai.com/*','https://chatgpt.com/*']);
  assert.equal(manifest.manifest_version,3);
 });
+test('popup scripts are present in the release package',()=>{
+ const {runtimeFiles}=require('../scripts/extension-package.cjs');
+ const files=runtimeFiles();
+ for(const file of ['popup.js','conversation-settings.js','trace.js','popup.html'])
+  assert.ok(files.includes(file),'Missing packaged asset: '+file);
+});

@@ -38,7 +38,8 @@ jobs:
             tests/extension-stress.test.cjs \
             tests/extension-manifest.test.cjs \
             tests/background-export.test.cjs \
-            tests/diagnostics-analyzer.test.cjs
+            tests/diagnostics-analyzer.test.cjs \
+            tests/extension-package.test.cjs
       - name: Determine version and existing release
         id: version
         env:
@@ -60,21 +61,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p dist/extension-package
-          node <<'NODE'
-          const fs = require('node:fs');
-          const path = require('node:path');
-          const m = require('./extension/manifest.json');
-          const files = [...new Set([...m.content_scripts.flatMap(x => x.js),
-            ...m.background.scripts, m.action.default_popup,
-            ...Object.values(m.icons), 'manifest.json', 'README.md'])];
-          for (const file of files) {
-            if (!/^[a-zA-Z0-9._/-]+$/.test(file) || file.includes('..')) {
-              throw Error('Unsafe file: ' + file);
-            }
-            fs.copyFileSync(path.join('extension', file), path.join('dist/extension-package', file));
-          }
-          console.log('Runtime files:', files.length);
-          NODE
+          node scripts/extension-package.cjs dist/extension-package
           (cd dist/extension-package && zip -q -9 -r "../AutoContinue-$VERSION-Firefox.zip" .)
           (cd dist && sha256sum "AutoContinue-$VERSION-Firefox.zip" > "AutoContinue-$VERSION-Firefox.zip.sha256")
           unzip -t "dist/AutoContinue-$VERSION-Firefox.zip"
