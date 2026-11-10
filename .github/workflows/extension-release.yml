@@ -1,0 +1,95 @@
+name: Release Firefox Auto-Continue
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "extension/**"
+      - ".github/workflows/extension-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: extension-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate dependency-free extension tests
+        run: |
+          node --test \
+            tests/watchdog-core.test.cjs \
+            tests/conversation-settings.test.cjs \
+            tests/incident-recovery.test.cjs \
+            tests/incident-edge.test.cjs \
+            tests/incident-fuzz.test.cjs \
+            tests/recovery-policy.test.cjs \
+            tests/trace.test.cjs \
+            tests/extension-stress.test.cjs \
+            tests/extension-manifest.test.cjs \
+            tests/background-export.test.cjs \
+            tests/diagnostics-analyzer.test.cjs
+      - name: Determine version and existing release
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(node -p "require('./extension/manifest.json').version")"
+          TAG="extension-v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release $TAG exists; skipping duplicate."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Package runtime files
+        if: steps.version.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist/extension-package
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const m = require('./extension/manifest.json');
+          const files = [...new Set([...m.content_scripts.flatMap(x => x.js),
+            ...m.background.scripts, m.action.default_popup,
+            ...Object.values(m.icons), 'manifest.json', 'README.md'])];
+          for (const file of files) {
+            if (!/^[a-zA-Z0-9._/-]+$/.test(file) || file.includes('..')) {
+              throw Error('Unsafe file: ' + file);
+            }
+            fs.copyFileSync(path.join('extension', file), path.join('dist/extension-package', file));
+          }
+          console.log('Runtime files:', files.length);
+          NODE
+          (cd dist/extension-package && zip -q -9 -r "../AutoContinue-$VERSION-Firefox.zip" .)
+          (cd dist && sha256sum "AutoContinue-$VERSION-Firefox.zip" > "AutoContinue-$VERSION-Firefox.zip.sha256")
+          unzip -t "dist/AutoContinue-$VERSION-Firefox.zip"
+      - name: Publish GitHub Release
+        if: steps.version.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            "dist/AutoContinue-$VERSION-Firefox.zip" \
+            "dist/AutoContinue-$VERSION-Firefox.zip.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "ChatGPT Auto-Continue v$VERSION" \
+            --notes-file extension/RELEASE_NOTES.md \
+            --latest
