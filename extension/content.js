@@ -247,9 +247,7 @@
     return {sentConfirmed,responseCompleted};
   }
 
-  function editableText(editor){
-    return (editor?.innerText||editor?.value||editor?.textContent||'').replace(/\u200b/g,'').trim();
-  }
+  function editableText(editor){return core.editorText(editor);}
   function setComposerText(editor,text){
     if(!editor || editableText(editor))return false;
     editor.focus();
@@ -260,19 +258,29 @@
       selection.removeAllRanges();
       selection.addRange(range);
       const inserted=document.execCommand('insertText',false,text);
-      if(!inserted || editableText(editor)!==text){
-        // Insertion fallback for simple contenteditable controls.
+      // Native insertText sends the beforeinput/input sequence Lexical expects.
+      // React can replace the editor synchronously in its input listener.
+      if(!inserted && !editableText(editor) &&
+         !editableText(core.composerEditor(document))){
         editor.textContent=text;
-        editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text}));
+        editor.dispatchEvent(new InputEvent('input',{
+          bubbles:true,inputType:'insertText',data:text
+        }));
       }
     }else{
-      const proto=editor.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+      const proto=editor.tagName==='TEXTAREA'?
+        HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
       const setter=Object.getOwnPropertyDescriptor(proto,'value')?.set;
       if(setter)setter.call(editor,text);
       else editor.value=text;
-      editor.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:text}));
+      editor.dispatchEvent(new InputEvent('input',{
+        bubbles:true,inputType:'insertText',data:text
+      }));
     }
-    return editableText(editor)===text;
+    // Always reacquire the editor: a controlled component may remount on input.
+    return editableText(core.composerEditor(document))===
+        core.normalizeComposerText(text) || editableText(editor)===
+        core.normalizeComposerText(text);
   }
   async function releaseCompletedStop(){
     const completedKey=core.lastCompletedAssistant(document);
@@ -298,27 +306,23 @@
       !core.detectErrorBanner(document);
   }
   async function clickSendWhenReady(text,submission){
+    const fail=code=>{if(submission)submission.abortReason=code;return false;};
     if(!submission || currentConversation()!==submission.path ||
-       activeSubmission!==submission)return false;
-    const editor=core.composerEditor(document);
-    const prepared=editor&&editableText(editor)===text;
-    if(!editor || (!core.composerEmpty(document)&&!prepared))return false;
-    // Never type the fixed prompt until ChatGPT exposes a usable Send action.
-    if(!await releaseCompletedStop())return false;
+       activeSubmission!==submission)return fail('submission-changed');
+    let editor=core.composerEditor(document);
+    const expected=core.normalizeComposerText(text);
+    if(!editor)return fail('composer-missing');
+    if(editableText(editor) && editableText(editor)!==expected)
+      return fail('user-draft-present');
+    if(!await releaseCompletedStop())return fail('stop-not-settled');
     if(!cfg.enabled || !isLeader ||
-       (!core.composerEmpty(document)&&!prepared) ||
-       currentConversation()!==submission.path)return false;
-    if(!prepared && !setComposerText(editor,text))return false;
-    if(prepared)editor.dispatchEvent(new InputEvent('input',{
-      bubbles:true,inputType:'insertText',data:null
-    }));
-    // React enables its Send button only after the input event has propagated.
-    const deadline=Date.now()+4500;
+       currentConversation()!==submission.path)return fail('ownership-changed');
+    if(!editableText(editor))setComposerText(editor,text);
+    // Allow React/Lexical to reconcile the input, replace the editor, and
+    // enable or remount Send. Never overwrite a nonmatching manual draft.
+    const deadline=Date.now()+8000;
+    let repairs=0,noticeAt=Date.now()+1200,reason='send-ui-timeout';
     while(Date.now()<deadline){
-      // Preserve legacy Stop-recovery compatibility when the incident module
-      // is absent (e.g. older installed builds and focused fallback tests).
-      // Production incident recovery additionally requires its durable
-      // resolved/partial key; the two modes must never bypass each other.
       const legacyRecovered=!incidentPolicy && state.interruptionDismissed;
       const incidentRecovered=Boolean(incidentPolicy &&
         incidentState?.phase==='resolved' && incidentState?.partial &&
@@ -330,18 +334,50 @@
         candidateAnswer.changedAt>0 &&
         Date.now()-candidateAnswer.changedAt>=core.DEFAULT_CFG.interruptStableMs);
       if(!cfg.enabled || !isLeader ||
-        (core.detectGenerating(document)&&!safeReleasedInterruption) ||
-        currentConversation()!==submission.path || activeSubmission!==submission)return false;
-      if(editableText(editor)!==text)return false;
+         currentConversation()!==submission.path ||
+         activeSubmission!==submission)return fail('ownership-changed');
+      if(core.detectGenerating(document)&&!safeReleasedInterruption)
+        return fail('generation-resumed');
+      editor=core.composerEditor(document);
+      if(!editor){reason='composer-missing';await sleep(100);continue;}
+      const actual=editableText(editor);
+      if(actual!==expected){
+        if(actual)return fail('composer-text-mismatch');
+        // Only repair an empty replacement editor. A human draft is sacrosanct.
+        if(repairs<2){
+          repairs++;
+          setComposerText(editor,text);
+        }
+        reason='composer-not-synchronized';
+        await sleep(120);
+        continue;
+      }
       const btn=core.sendButton(document);
-      if(btn && !btn.disabled && btn.getAttribute('aria-disabled')!=='true' &&
-        btn.getClientRects().length){
+      if(btn && !btn.disabled &&
+         btn.getAttribute('aria-disabled')!=='true' &&
+         btn.isConnected!==false && btn.getClientRects().length){
+        // Revalidate the active editor immediately before the one permitted click.
+        if(editableText(core.composerEditor(document))!==expected){
+          reason='composer-remounted-before-click';await sleep(100);continue;
+        }
         btn.click();
         return true;
       }
+      reason=!btn?'send-button-missing':
+        btn.disabled?'send-button-disabled':
+        btn.getAttribute('aria-disabled')==='true'?'send-aria-disabled':
+        'send-button-not-visible';
+      // Some controlled editors need another input event after mounting.
+      // This does not modify the text and is bounded to one notification.
+      if(Date.now()>=noticeAt){
+        noticeAt=Infinity;
+        editor.dispatchEvent(new InputEvent('input',{
+          bubbles:true,inputType:'insertText',data:null
+        }));
+      }
       await sleep(100);
     }
-    return false;
+    return fail(reason);
   }
   function record(reason,action,extra){
     const meaningful=action==='send'||reason==='send-failed'||reason==='retry-error'||
@@ -402,10 +438,10 @@
           sends:Math.max(0,state.sends-1),blocked:false,
           dueAt:Date.now()+15000};
         const editor=core.composerEditor(document),sendButton=core.sendButton(document);
-        const why=!stillHere()?'navigation':!isLeader?'leader-lost':
+        const why=submission.abortReason||(!stillHere()?'navigation':!isLeader?'leader-lost':
           !editor?'composer-missing':!sendButton?'send-button-missing':
           (sendButton.disabled||sendButton.getAttribute('aria-disabled')==='true')?
-            'send-button-disabled':'send-action-not-ready';
+            'send-button-disabled':'send-action-not-ready');
         traceEvent('send-not-clicked',{
           phase:'before-click',reason:why,leader:isLeader,
           hasEditor:!!editor,sendReady:!!sendButton&&!sendButton.disabled,

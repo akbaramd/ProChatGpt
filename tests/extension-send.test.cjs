@@ -8,7 +8,8 @@ const conversation='https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc';
 
 async function fixture({error=false,staleStop=false,initiallyGenerating=false,preparedDraft=false,
   maxSends=1,delaySeconds=0,targetConversation=null,interrupted=false,
-  stuckProgressAfterStop=false,initialReceipt=null,oldError=false,maxed=false,domVariant=null,urlVariant=null,enableIncident=false}={}){
+  stuckProgressAfterStop=false,initialReceipt=null,oldError=false,maxed=false,domVariant=null,urlVariant=null,enableIncident=false,
+  remountEditor=false,remountEmptyEditor=false,remountSend=false,delayedSend=false}={}){
   const browser=await chromium.launch({channel:'msedge',headless:true,chromiumSandbox:true});
   const context=await browser.newContext();
   await context.addInitScript(({maxSends,delaySeconds,targetConversation,initialReceipt})=>{
@@ -62,12 +63,31 @@ async function fixture({error=false,staleStop=false,initiallyGenerating=false,pr
       window.__loads=Number(localStorage.getItem('__fixtureLoads')||0)+1;
       localStorage.setItem('__fixtureLoads',String(window.__loads));
       window.__oldRetried=0;
-      const editor=document.getElementById('prompt-textarea');
-      const button=document.getElementById('send');
-      editor.addEventListener('input',()=>{
+      let editor=document.getElementById('prompt-textarea');
+      let button=document.getElementById('send');
+      let editorRemounted=false,sendRemounted=false;
+      function onEditorInput(){
         button.disabled=!(editor.innerText||editor.textContent||'').trim();
         button.style.display=document.getElementById('stale-stop')?'none':'';
-      });
+        if(${delayedSend}){
+          button.setAttribute('aria-disabled','true');
+          setTimeout(()=>button.removeAttribute('aria-disabled'),750);
+        }
+        if(${remountEditor} && !editorRemounted){
+          editorRemounted=true;
+          const next=editor.cloneNode(!${remountEmptyEditor});
+          editor.replaceWith(next);
+          editor=next;
+          editor.addEventListener('input',onEditorInput);
+        }
+        if(${remountSend} && !sendRemounted){
+          sendRemounted=true;
+          const next=button.cloneNode(true);
+          button.replaceWith(next);
+          button=next;
+        }
+      }
+      editor.addEventListener('input',onEditorInput);
       // While Stop exists, ChatGPT exposes Stop instead of Send.
       if(document.getElementById('stale-stop'))button.style.display='none';
       function send(){
@@ -470,4 +490,29 @@ test('incident Retry refreshes before first-party Retry then continues once',asy
   assert.equal(await page.evaluate(()=>window.__loads),2);
   assert.equal(await page.evaluate(()=>window.__retried),1);
  }finally{await browser.close();}
+});
+test('controlled composer remount and delayed Send enablement still sends once',async()=>{
+  const {browser,page}=await fixture({
+    remountEditor:true,remountSend:true,delayedSend:true,maxSends:1
+  });
+  try{
+    await waitFor(page,()=>window.__sent.length===1,21000);
+    assert.deepEqual(await page.evaluate(()=>window.__sent),['ادامه بده']);
+    await page.waitForTimeout(1800);
+    assert.equal(await page.evaluate(()=>window.__sent.length),1);
+    const events=await page.evaluate(async()=>(
+      await window.AutoContinueTrace.readAll(browser.storage.local)).events);
+    assert.equal(events.filter(e=>e.event==='send-clicked').length,1);
+  }finally{await browser.close();}
+});
+test('empty replacement editor is repaired without duplicating text or sends',async()=>{
+  const {browser,page}=await fixture({
+    remountEditor:true,remountEmptyEditor:true,delayedSend:true,maxSends:1
+  });
+  try{
+    await waitFor(page,()=>window.__sent.length===1,21000);
+    assert.deepEqual(await page.evaluate(()=>window.__sent),['ادامه بده']);
+    await page.waitForTimeout(1800);
+    assert.equal(await page.evaluate(()=>window.__sent.length),1);
+  }finally{await browser.close();}
 });

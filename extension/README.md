@@ -1,4 +1,4 @@
-# ChatGPT Auto-Continue 0.4.1 (Firefox)
+# ChatGPT Auto-Continue 0.4.3 (Firefox)
 
 Per-conversation follow-up automation via the ordinary ChatGPT page UI. Each saved chat has its own Enabled state, follow-up text, delay and send cap. Multiple chats can run in separate tabs; a Web Lock prevents two tabs of the same chat from sending concurrently.
 
@@ -11,6 +11,7 @@ Open each saved conversation (`/c/... ` or `/g/.../c/...`) and enable it individ
 ## Reliability model
 
 - The watchdog observes DOM changes and also polls every 2.5 seconds. Mutation bursts are coalesced, with a slower cadence while answers stream.
+- Composer submission reacquires the active editor after React/Lexical remounts, verifies the entered text, waits up to 8 seconds for Send readiness and reports exact pre-click failure reasons. A missing or replaced editor can be filled again only when empty; existing user drafts are never overwritten.
 - It recognizes multiple conversation DOM families (`data-chatgpt-search-unit-key`, `data-message-author-role`, `section[data-turn]`), composer variants, and send-button IDs. It only sends after a completed assistant turn and preserves unrelated user drafts.
 - Retry and Connection interrupted errors use one persisted incident state machine: observe, refresh once, reconcile, optionally Stop/Retry, and resume only after safe settlement. Unconfirmed user prompts are not resent.
 - Each chat has its own durable send receipt. A receipt is persisted *before* clicking Send so reloads cannot blindly replay the same assistant turn. Unknown delivery remains blocked until a new completed assistant reply is observed.

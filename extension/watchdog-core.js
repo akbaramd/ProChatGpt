@@ -8,7 +8,14 @@
 
   // ---- DOM detectors (the only ChatGPT-markup-specific part) -----------------
 
-  function visibleEl(el) { return Boolean(el && (el.getClientRects?.().length || el.offsetParent !== null)); }
+  function visibleEl(el) {
+    if(!el || el.isConnected===false || el.closest?.('[hidden],[inert],[aria-hidden="true"]'))
+      return false;
+    const style=el.ownerDocument?.defaultView?.getComputedStyle?.(el);
+    if(style && (style.display==='none' || style.visibility==='hidden' ||
+       style.visibility==='collapse'))return false;
+    return Boolean(el.getClientRects?.().length || el.offsetParent !== null);
+  }
   const interruptedCache=new WeakMap();
   const maxLengthCache=new WeakMap();
 
@@ -92,22 +99,35 @@
     'button[aria-label="Send"]';
   function composerEditor(doc) {
     const editors=[...doc.querySelectorAll(EDITORS)];
-    return editors.find(visibleEl)||editors[0]||null;
+    // Prefer the active editor, not a hidden or detached previous instance.
+    return editors.find(visibleEl)||editors.find(e=>e.isConnected!==false)||null;
+  }
+  function normalizeComposerText(value) {
+    return String(value||'').replace(/[\u200b-\u200d\u2060\ufeff]/g,'')
+      .replace(/\u00a0/g,' ').replace(/\r\n?/g,'\n').trim();
+  }
+  function editorText(editor) {
+    if(!editor)return '';
+    const raw=/^(TEXTAREA|INPUT)$/.test(editor.tagName||'')?editor.value:
+      (editor.innerText||editor.textContent||'');
+    return normalizeComposerText(raw);
   }
   function composerEmpty(doc) {
     const editor=composerEditor(doc);
-    if(!editor)return false;
-    const text=(editor.innerText||editor.value||editor.textContent||'')
-      .replace(/\u200b/g,'').trim();
-    return text.length===0;
+    return Boolean(editor && !editorText(editor));
   }
   function sendButton(doc) {
     const editor=composerEditor(doc),form=editor?.closest('form');
-    const scoped=form?[...form.querySelectorAll(SEND_BUTTONS+',button[type="submit"]')]:[];
-    const candidates=scoped.length?scoped:[...doc.querySelectorAll(SEND_BUTTONS)];
-    const visible=candidates.filter(visibleEl);
-    return visible.find(b=>!b.disabled&&b.getAttribute('aria-disabled')!=='true')||
-      visible[0]||candidates[0]||null;
+    const selector=SEND_BUTTONS+',button[type="submit"]';
+    const eligible=button=>visibleEl(button) &&
+      !/^(?:start voice|voice|stop|attach|record)$/i.test(
+        (button.getAttribute('aria-label')||'').trim());
+    // A stale Send elsewhere on the page must not win over the active form.
+    const local=form?[...form.querySelectorAll(selector)].filter(eligible):[];
+    const candidates=local.length?local:
+      [...doc.querySelectorAll(SEND_BUTTONS)].filter(eligible);
+    return candidates.find(b=>!b.disabled && b.getAttribute('aria-disabled')!=='true')||
+      candidates[0]||null;
   }
 
   function canSend(doc) {
@@ -502,7 +522,7 @@
   }
 
   const api = {
-    turnNodes,roleOf,messageKey,detectGenerating, composerEmpty, sendButton, canSend, composerEditor,
+    turnNodes,roleOf,messageKey,detectGenerating, composerEmpty, editorText, normalizeComposerText, sendButton, canSend, composerEditor,
     detectRateLimited, detectErrorBanner, detectInterrupted,detectConversationMaxed,
     retryButton, stopButton,
     lastVisibleTurn, lastCompletedAssistant, observe,

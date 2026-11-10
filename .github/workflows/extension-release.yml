@@ -39,7 +39,8 @@ jobs:
             tests/extension-manifest.test.cjs \
             tests/background-export.test.cjs \
             tests/diagnostics-analyzer.test.cjs \
-            tests/extension-package.test.cjs
+            tests/extension-package.test.cjs \
+            tests/composer-dom.test.cjs
       - name: Determine version and existing release
         id: version
         env:
