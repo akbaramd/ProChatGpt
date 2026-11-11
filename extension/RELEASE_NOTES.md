@@ -3,6 +3,10 @@
 Per-conversation ChatGPT follow-up automation for Firefox with independent tab jobs, Web Locks to prevent duplicate sends, and durable pre-send receipts.
 
 ## Changes
+- Prioritized ChatGPT's visible first-party Retry button for `Message delivery timed out` and `Error in input stream`; no unnecessary Refresh before the first Retry.
+- Removed a progress-quiescence requirement that could indefinitely postpone Retry when a failing response's DOM/status kept changing.
+- Handles a stale `in_progress` marker when a timeout Retry is available without an active Stop control.
+- Preserves bounded recovery and sends the next continuation only after the recovered response completes. Added regression tests reproducing the supplied timeout-button markup.
 - Historical stale `in_progress` markers no longer prevent completion detection for the latest assistant turn when ChatGPT omits its terminal-state attribute.
 - Prevented duplicate user prompts if a Send click is accepted but its JavaScript handler throws afterward.
 - Fixed a Web Locks ownership race and the old conversation's lock-attempt cooldown leaking into the next conversation.

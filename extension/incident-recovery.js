@@ -1,8 +1,9 @@
 (function(global){
  'use strict';
- const RETRY_GRACE_MS=10000, INTERRUPT_GRACE_MS=45000;
+ const RETRY_GRACE_MS=5000, INTERRUPT_GRACE_MS=45000;
  const QUIET_MS=30000, AFTER_RELOAD_MS=30000, STOP_GRACE_MS=15000;
- const RETRY_TIMEOUT_MS=120000, STOP_TIMEOUT_MS=120000, INCIDENT_TTL_MS=3600000;
+ const RETRY_TIMEOUT_MS=120000, RETRY_STALL_RELOAD_MS=45000, MAX_RETRIES=2;
+ const STOP_TIMEOUT_MS=120000, INCIDENT_TTL_MS=3600000;
  const hashText=text=>{let h=2166136261;const v=String(text||'');for(let i=0;i<v.length;i++)h=Math.imul(h^v.charCodeAt(i),16777619);return (h>>>0).toString(16);};
  const cleanAssistantText=text=>String(text||'')
    .replace(/Connection interrupted\.\s*Waiting for the complete answer\.?/gi,'')
@@ -62,6 +63,16 @@
    }
    if(e.phase==='hold')return result(e,'hold','manual-verification-required');
    if(e.phase==='watch'){
+     // Prefer the first-party Retry for a failed response; do not reload first.
+     // Assistant error widgets may keep mutating: no text-quiet requirement
+     // is needed for an explicit, actionable first-party Retry control.
+     // Never act while Stop is visible or the user has a manual draft.
+     if(e.kind==='retry'&&kind==='retry'&&o.retryAvailable&&
+        !o.hasStopButton&&o.composerEmpty&&e.retries<MAX_RETRIES&&
+        now-e.startedAt>=RETRY_GRACE_MS){
+       e.phase='retried';e.phaseAt=now;e.retries++;
+       return result(e,'retry','first-party-retry-direct');
+     }
      if(!kind&&!o.generating&&!o.hasStopButton){
        if(o.latestTurnRole==='assistant'&&o.completedAssistantKey&&
           hasTrustedCompletion&&o.latestAssistantLength>0&&now-e.lastProgressAt>=QUIET_MS){
@@ -86,7 +97,7 @@
        e.phase='stopped';e.phaseAt=now;e.stops++;
        return result(e,'stop','stalled-stop-after-reload');
      }
-     if(o.retryAvailable&&e.retries<1){
+     if(o.retryAvailable&&e.retries<MAX_RETRIES){
        e.phase='retried';e.phaseAt=now;e.retries++;
        return result(e,'retry','first-party-retry-after-reload');
      }
@@ -123,6 +134,15 @@
      return result(e,'hold','no-confirmed-answer-after-stop');
    }
    if(e.phase==='retried'){
+     // One bounded refresh if the same error survives Retry without progress.
+     // Do not resubmit the user's prompt. A second UI Retry is capped.
+     if(e.kind==='retry'&&kind==='retry'&&o.retryAvailable&&
+        e.refreshes<1&&!o.hasStopButton&&o.composerEmpty&&
+        now-e.phaseAt>=RETRY_STALL_RELOAD_MS&&
+        now-e.lastProgressAt>=QUIET_MS){
+       e.phase='reloaded';e.phaseAt=now;e.refreshes++;
+       return result(e,'reload','retry-stalled-refresh');
+     }
      if(now-e.phaseAt<RETRY_TIMEOUT_MS)return result(e,'wait','await-retried-answer');
      return result(e,'hold','retry-unconfirmed');
    }
@@ -130,7 +150,7 @@
  }
  const api={transition,init,issueOf,progress,settled,RETRY_GRACE_MS,
    INTERRUPT_GRACE_MS,QUIET_MS,AFTER_RELOAD_MS,STOP_GRACE_MS,RETRY_TIMEOUT_MS,
-   STOP_TIMEOUT_MS,hashText,cleanAssistantText};
+   STOP_TIMEOUT_MS,RETRY_STALL_RELOAD_MS,MAX_RETRIES,hashText,cleanAssistantText};
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
  else global.AutoContinueIncident=api;
 })(typeof window!=='undefined'?window:globalThis);

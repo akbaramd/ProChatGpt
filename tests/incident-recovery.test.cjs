@@ -4,18 +4,41 @@ const base={online:true,composerEmpty:true,errorBanner:false,connectionInterrupt
  latestAssistantKey:'old',latestAssistantLength:100,latestTurnRole:'assistant',
  completedAssistantKey:null};
 function step(e,patch,now){return policy.transition(e,{...base,...patch},now)}
-test('retry: refresh before first-party Retry, release only on a new completed answer',()=>{
- let r=step(null,{errorBanner:true,retryAvailable:true},1000);
- assert.equal(r.action,'persist');let s=r.incident;
- r=step(s,{errorBanner:true,retryAvailable:true},1000+15000);
- assert.equal(r.action,'wait'); // quiet window, no premature retry
- r=step(s,{errorBanner:true,retryAvailable:true},1000+31000);
- assert.equal(r.action,'reload');assert.equal(r.incident.refreshes,1);s=r.incident;
- r=step(s,{errorBanner:true,retryAvailable:true},1000+62000);
- assert.equal(r.action,'retry');assert.equal(r.incident.retries,1);s=r.incident;
- r=step(s,{errorBanner:false,retryAvailable:false,
-  latestAssistantKey:'new',latestAssistantLength:90,completedAssistantKey:'new'},1000+64000);
+test('explicit Retry fires before refresh; only a new completed answer releases',()=>{
+ let r=step(null,{errorBanner:true,retryAvailable:true,generating:true},1000);
+ assert.equal(r.action,'persist');let e=r.incident;
+ r=step(e,{errorBanner:true,retryAvailable:true,generating:true},1000+2500);
+ assert.equal(r.action,'wait');
+ r=step(e,{errorBanner:true,retryAvailable:true,generating:true},1000+5500);
+ assert.equal(r.action,'retry');assert.equal(r.reason,'first-party-retry-direct');
+ assert.equal(r.incident.retries,1);assert.equal(r.incident.refreshes,0);e=r.incident;
+ r=step(e,{errorBanner:true,retryAvailable:true,generating:true},1000+7000);
+ assert.equal(r.action,'wait');
+ r=step(e,{errorBanner:false,retryAvailable:false,
+   latestAssistantKey:'new',latestAssistantLength:90,
+   completedAssistantKey:'new'},1000+9000);
  assert.equal(r.action,'release');
+});
+test('failed first-party Retry refreshes once and can use one additional Retry',()=>{
+ let e=step(null,{errorBanner:true,retryAvailable:true},1000).incident;
+ let r=step(e,{errorBanner:true,retryAvailable:true},6500);
+ assert.equal(r.action,'retry');e=r.incident;
+ r=step(e,{errorBanner:true,retryAvailable:true},27000);
+ assert.equal(r.action,'wait');
+ r=step(e,{errorBanner:true,retryAvailable:true},52000);
+ assert.equal(r.action,'reload');assert.equal(r.incident.refreshes,1);e=r.incident;
+ r=step(e,{errorBanner:true,retryAvailable:true},83000);
+ assert.equal(r.action,'retry');assert.equal(r.incident.retries,2);e=r.incident;
+ r=step(e,{errorBanner:true,retryAvailable:true},205000);
+ assert.equal(r.action,'hold');assert.equal(r.incident.retries,2);
+});
+test('Retry does not click while draft, offline, Stop, or service limits are active',()=>{
+ const e=step(null,{errorBanner:true,retryAvailable:true},1000).incident;
+ for(const issue of [{composerEmpty:false},{online:false},{hasStopButton:true},
+   {rateLimited:true},{conversationMaxed:true}]){
+   const r=step(e,{errorBanner:true,retryAvailable:true,...issue},7000);
+   assert.notEqual(r.action,'retry');
+ }
 });
 test('interruption: reload then wait for recovery; Stop only once when no progress',()=>{
  let r=step(null,{connectionInterrupted:true,generating:true,hasStopButton:true},2000),s=r.incident;
@@ -83,12 +106,12 @@ test('late text growth after Stop blocks new sending',()=>{
   latestAssistantLength:101},127000);
  assert.equal(growth.action,'hold');assert.equal(growth.incident.phase,'hold');
 });
-test('completed response after reload needs no text growth to reconcile safely',()=>{
+test('completed response after a direct Retry needs no text growth',()=>{
  let r=step(null,{errorBanner:true,retryAvailable:true},1000);
- r=step(r.incident,{errorBanner:true,retryAvailable:true},33000);
- assert.equal(r.action,'reload');
+ r=step(r.incident,{errorBanner:true,retryAvailable:true},7000);
+ assert.equal(r.action,'retry');
  r=step(r.incident,{errorBanner:false,retryAvailable:false,
-  completedAssistantKey:'old'},65000);
+  completedAssistantKey:'old'},8000);
  assert.equal(r.action,'release');
 });
 test('stale in_progress marker after Stop cannot permanently block stable partial recovery',()=>{
@@ -115,4 +138,18 @@ test('continued output postpones stop even after the reload observation interval
  assert.equal(more.action,'wait');
  const second=step(more.incident,{connectionInterrupted:true,generating:true,hasStopButton:true,latestAssistantLength:180},105000);
  assert.equal(second.action,'wait');
+});
+test('persistent delivery timeout retries even when assistant status keeps changing',()=>{
+ let e=step(null,{errorBanner:true,retryAvailable:true,generating:true},1000).incident;
+ for(let i=1;i<=4;i++){
+  const r=step(e,{errorBanner:true,retryAvailable:true,generating:true,
+   latestAssistantLength:100+i},1000+i*1000);
+  assert.equal(r.action,'wait');e=r.incident;
+ }
+ const r=step(e,{errorBanner:true,retryAvailable:true,generating:true,
+  latestAssistantLength:105},6500);
+ assert.equal(r.action,'retry');
+ assert.equal(r.reason,'first-party-retry-direct');
+ assert.equal(r.incident.refreshes,0);
+ assert.equal(r.incident.retries,1);
 });

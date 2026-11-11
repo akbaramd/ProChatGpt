@@ -1,4 +1,4 @@
-# ChatGPT Auto-Continue 0.4.4 (Firefox)
+# ChatGPT Auto-Continue 0.4.5 (Firefox)
 
 Per-conversation follow-up automation via the ordinary ChatGPT page UI. Each saved chat has its own Enabled state, follow-up text, delay and send cap. Multiple chats can run in separate tabs; a Web Lock prevents two tabs of the same chat from sending concurrently.
 
@@ -7,6 +7,10 @@ Per-conversation follow-up automation via the ordinary ChatGPT page UI. Each sav
 Open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on** and select this folder's `manifest.json`. Reload existing ChatGPT tabs after updating the extension. The temporary add-on must be loaded again after Firefox restarts.
 
 Open each saved conversation (`/c/... ` or `/g/.../c/...`) and enable it individually from the in-page control or the toolbar popup. Unconfigured chats remain Off. `maxSends=0` means unbounded, but live testing should always use a small cap.
+
+## Timeout / first-party Retry recovery
+
+When ChatGPT displays an explicit `Message delivery timed out` or `Error in input stream` error with its own Retry button, wait a short safety grace period, click the first-party Retry (not Send), confirm recovery, and continue only after a new completed assistant response. This does not depend on transient assistant text remaining unchanged. A stale `in_progress` marker without a Stop button does not prevent Retry. Attempts and refreshes are bounded; unresolved delivery is never blindly resubmitted.
 
 ## Reliability model
 

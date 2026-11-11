@@ -32,7 +32,7 @@ test('fuzz 250 incident timelines: no duplicate reload Stop or Retry',()=>{
    }
    assert.ok(episode.reload<=1,JSON.stringify({trial,step,episode}));
    assert.ok(episode.stop<=1,JSON.stringify({trial,step,episode}));
-   assert.ok(episode.retry<=1,JSON.stringify({trial,step,episode}));
+   assert.ok(episode.retry<=policy.MAX_RETRIES,JSON.stringify({trial,step,episode}));
    rec=result.incident;
   }
  }

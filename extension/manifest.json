@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Auto-Continue",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Independent ChatGPT follow-ups with durable receipts, bounded recovery, and per-tab diagnostic traces.",
   "browser_specific_settings": {
     "gecko": {

@@ -9,7 +9,8 @@ const conversation='https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc';
 async function fixture({error=false,staleStop=false,initiallyGenerating=false,preparedDraft=false,
   maxSends=1,delaySeconds=0,targetConversation=null,interrupted=false,
   stuckProgressAfterStop=false,initialReceipt=null,oldError=false,maxed=false,domVariant=null,urlVariant=null,enableIncident=false,
-  remountEditor=false,remountEmptyEditor=false,remountSend=false,delayedSend=false}={}){
+  remountEditor=false,remountEmptyEditor=false,remountSend=false,delayedSend=false,
+  timeoutError=false,staleInProgressNoStop=false}={}){
   const browser=await chromium.launch({channel:'msedge',headless:true,chromiumSandbox:true});
   const context=await browser.newContext();
   await context.addInitScript(({maxSends,delaySeconds,targetConversation,initialReceipt})=>{
@@ -43,14 +44,14 @@ async function fixture({error=false,staleStop=false,initiallyGenerating=false,pr
       <main style="padding:40px">
         <div id="transcript">
           ${oldError?'<div data-talvt-turn-state="complete"><div data-chatgpt-search-unit-key="old:assistant"><div role="alert">Error in input stream</div><button aria-label="Retry" id="old-retry" onclick="window.__oldRetried++">Retry</button></div></div>':''}
-          <div data-talvt-turn-state="${initiallyGenerating||interrupted?'in_progress':'complete'}" id="assistant-wrapper">
+          <div data-talvt-turn-state="${initiallyGenerating||interrupted||staleInProgressNoStop?'in_progress':'complete'}" id="assistant-wrapper">
             <div data-chatgpt-search-unit-key="initial:assistant">
               <p>Previous answer</p>
               ${interrupted?'<div id="interrupted-banner">Connection interrupted. Waiting for the complete answer</div>':''}
             </div>
           </div>
           ${staleStop||initiallyGenerating||interrupted?'<button data-testid="stop-button" id="stale-stop" onclick="endStop()">Stop</button>':''}
-          ${error?'<div role="alert" id="delivery-error"><span>Error in input stream</span><button id="retry" onclick="recover()">Retry</button></div>':''}
+          ${error?`<div role="alert" id="delivery-error"><span>${timeoutError?'Message delivery timed out. Please try again.':'Error in input stream'}</span><div class="flex gap-2 shrink-0 mt-2 min-w-fit"><button type="button" class="no-drag cursor-interaction rounded-full border px-2 py-0.5" id="retry" onclick="recover()">Retry</button></div></div>`:''}
           ${maxed?'<div role="alert" id="max-warning">You have reached the maximum length for this conversation, but you can keep talking by starting a new chat.</div>':''}
         </div>
         <div id="prompt-textarea" contenteditable="true" role="textbox" aria-label="Ask ChatGPT"
@@ -474,21 +475,22 @@ test('incident interruption reloads, stops once and continues with stale in-prog
   assert.equal(await page.evaluate(()=>window.__loads),2);
  }finally{await browser.close();}
 });
-test('incident Retry refreshes before first-party Retry then continues once',async()=>{
- const {browser,page}=await fixture({error:true,maxSends:1,enableIncident:true});
+test('first-party Retry for a timeout fires before any refresh, then continues once',async()=>{
+ const {browser,page}=await fixture({
+  error:true,timeoutError:true,staleInProgressNoStop:true,maxSends:1,enableIncident:true
+ });
  try{
-  await waitFor(page,()=>window.__autoState['autoContinue:conversation:'+location.pathname+':incident']?.phase==='watch',20000);
-  await page.evaluate(()=>{
-    const rawNow=Date.now.bind(Date);
-    Date.now=()=>rawNow()+Number(localStorage.getItem('__timeOffset')||0);
-  });
-  await advanceIncidentClock(page,90000);
-  await waitFor(page,()=>Number(localStorage.getItem('__fixtureLoads')||0)===2,30000);
-  await advanceIncidentClock(page,180000);
-  await waitFor(page,()=>window.__retried===1,30000);
-  await waitFor(page,()=>window.__sent.length===1,30000);
-  assert.equal(await page.evaluate(()=>window.__loads),2);
-  assert.equal(await page.evaluate(()=>window.__retried),1);
+  await waitFor(page,()=>window.__autoState[
+   'autoContinue:conversation:'+location.pathname+':incident']?.phase==='watch',18000);
+  await waitFor(page,()=>window.__retried===1,24000);
+  assert.equal(await page.evaluate(()=>window.__loads),1,'do not reload before the Retry button');
+  assert.equal(await page.locator('#delivery-error').count(),0);
+  await waitFor(page,()=>window.__sent.length===1,26000);
+  assert.deepEqual(await page.evaluate(()=>window.__sent),['ادامه بده']);
+  const events=await page.evaluate(async()=>(
+   await window.AutoContinueTrace.readAll(browser.storage.local)).events);
+  assert.equal(events.filter(e=>e.event==='incident-retry-clicked').length,1);
+  assert.equal(events.some(e=>e.event==='incident-reload'),false);
  }finally{await browser.close();}
 });
 test('controlled composer remount and delayed Send enablement still sends once',async()=>{
