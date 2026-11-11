@@ -10,16 +10,16 @@ async function fixture({error=false,staleStop=false,initiallyGenerating=false,pr
   maxSends=1,delaySeconds=0,targetConversation=null,interrupted=false,
   stuckProgressAfterStop=false,initialReceipt=null,oldError=false,maxed=false,domVariant=null,urlVariant=null,enableIncident=false,
   remountEditor=false,remountEmptyEditor=false,remountSend=false,delayedSend=false,
-  timeoutError=false,staleInProgressNoStop=false}={}){
+  timeoutError=false,staleInProgressNoStop=false,initialDraft='',draftMode='append'}={}){
   const browser=await chromium.launch({channel:'msedge',headless:true,chromiumSandbox:true});
   const context=await browser.newContext();
-  await context.addInitScript(({maxSends,delaySeconds,targetConversation,initialReceipt})=>{
+  await context.addInitScript(({maxSends,delaySeconds,targetConversation,initialReceipt,draftMode})=>{
     window.__autoState=JSON.parse(localStorage.getItem('__fixtureStore')||'null')||{
-      enabled:true,message:'ادامه بده',delaySeconds,maxSends,targetConversation,
+      enabled:true,message:'ادامه بده',delaySeconds,maxSends,targetConversation,draftMode,
       autoContinueReceipt:initialReceipt,autoContinueRunId:null,
       logs:[],metrics:{}
     };
-    window.__autoState['autoContinue:conversation:/c/12345678-1234-1234-1234-123456789abc'] ||= {enabled:true,message:'ادامه بده',delaySeconds,maxSends,autoContinueRunId:null};
+    window.__autoState['autoContinue:conversation:/c/12345678-1234-1234-1234-123456789abc'] ||= {enabled:true,message:'ادامه بده',delaySeconds,maxSends,autoContinueRunId:null,draftMode};
     window.__autoState['autoContinue:conversation:/c/12345678-1234-1234-1234-123456789abc:receipt'] ??=initialReceipt;
     const listeners=new Set();
     window.browser={
@@ -37,7 +37,7 @@ async function fixture({error=false,staleStop=false,initiallyGenerating=false,pr
         onChanged:{addListener(fn){listeners.add(fn)}}
       }
     };
-  },{maxSends,delaySeconds,targetConversation,initialReceipt});
+  },{maxSends,delaySeconds,targetConversation,initialReceipt,draftMode});
   await context.route('https://chatgpt.com/**',route=>route.fulfill({
     status:200,contentType:'text/html; charset=utf-8',
     body:`<!doctype html><html><body>
@@ -55,7 +55,7 @@ async function fixture({error=false,staleStop=false,initiallyGenerating=false,pr
           ${maxed?'<div role="alert" id="max-warning">You have reached the maximum length for this conversation, but you can keep talking by starting a new chat.</div>':''}
         </div>
         <div id="prompt-textarea" contenteditable="true" role="textbox" aria-label="Ask ChatGPT"
-          style="width:600px;min-height:35px;border:1px solid #ddd"></div>
+          style="width:600px;min-height:35px;border:1px solid #ddd;white-space:pre-wrap"></div>
         <button data-testid="send-button" id="send" disabled onclick="send()">Send</button>
       </main>
       <script>
@@ -89,6 +89,10 @@ async function fixture({error=false,staleStop=false,initiallyGenerating=false,pr
         }
       }
       editor.addEventListener('input',onEditorInput);
+      if(${JSON.stringify(initialDraft)}){
+        editor.textContent=${JSON.stringify(initialDraft)};
+        editor.dispatchEvent(new InputEvent('input',{bubbles:true}));
+      }
       // While Stop exists, ChatGPT exposes Stop instead of Send.
       if(document.getElementById('stale-stop'))button.style.display='none';
       function send(){
@@ -244,8 +248,8 @@ test('error in input stream clicks first-party Retry then sends one continuation
   }finally{await browser.close();}
 });
 
-test('unsent human draft is never overwritten',async()=>{
-  const {browser,page}=await fixture();
+test('preserve draft mode never overwrites existing text',async()=>{
+  const {browser,page}=await fixture({draftMode:'preserve'});
   try{
     // The fixture has zero delay and might send quickly, so disable and
     // prefill a real draft before re-enabling the scheduler.
@@ -627,5 +631,59 @@ test('historical in_progress marker cannot block a stable current answer',async(
   });
   await waitFor(page,()=>window.__sent.length===1,26000);
   assert.deepEqual(await page.evaluate(()=>window.__sent),['ادامه بده']);
+ }finally{await browser.close();}
+});
+test('append draft mode preserves original text and submits continuation once',async()=>{
+ const {browser,page}=await fixture({initialDraft:'A user draft',draftMode:'append',maxSends:1});
+ try{
+  await waitFor(page,()=>window.__sent.length===1,26000);
+  const sent=(await page.evaluate(()=>window.__sent))[0];
+  assert.equal(sent.replace(/\s+/g,' ').trim(),'A user draft ادامه بده');
+  assert.equal((sent.match(/ادامه بده/g)||[]).length,1);
+  await page.waitForTimeout(1600);
+  assert.equal(await page.evaluate(()=>window.__sent.length),1);
+ }finally{await browser.close();}
+});
+test('replace draft mode clears old text and submits only continuation once',async()=>{
+ const {browser,page}=await fixture({initialDraft:'Do not send this draft',draftMode:'replace',maxSends:1});
+ try{
+  await waitFor(page,()=>window.__sent.length===1,26000);
+  assert.deepEqual(await page.evaluate(()=>window.__sent),['ادامه بده']);
+  await page.waitForTimeout(1400);
+  assert.equal(await page.evaluate(()=>window.__sent.length),1);
+ }finally{await browser.close();}
+});
+test('append draft mode does not add continuation twice after a prepared draft',async()=>{
+ const {browser,page}=await fixture({
+  initialDraft:'A user draft\n\nادامه بده',draftMode:'append',maxSends:1
+ });
+ try{
+  await waitFor(page,()=>window.__sent.length===1,26000);
+  const sent=(await page.evaluate(()=>window.__sent))[0];
+  assert.equal(sent.replace(/\s+/g,' ').trim(),'A user draft ادامه بده');
+  assert.equal((sent.match(/ادامه بده/g)||[]).length,1);
+ }finally{await browser.close();}
+});
+test('preserve draft mode pauses rather than sending a user draft',async()=>{
+ const {browser,page}=await fixture({initialDraft:'A private draft',draftMode:'preserve',maxSends:1});
+ try{
+  await page.waitForTimeout(3700);
+  assert.deepEqual(await page.evaluate(()=>window.__sent),[]);
+  assert.equal(await page.locator('#prompt-textarea').innerText(),'A private draft');
+ }finally{await browser.close();}
+});
+test('first-party Retry works with a nonempty draft, then appends exactly once',async()=>{
+ const {browser,page}=await fixture({
+  error:true,timeoutError:true,initialDraft:'Unsent notes',
+  draftMode:'append',maxSends:1,enableIncident:true
+ });
+ try{
+  await waitFor(page,()=>window.__retried===1,27000);
+  await waitFor(page,()=>window.__sent.length===1,31000);
+  const messages=await page.evaluate(()=>window.__sent);
+  assert.equal(messages.length,1);
+  assert.match(messages[0],/^Unsent notes\s+ادامه بده$/);
+  assert.equal((messages[0].match(/ادامه بده/g)||[]).length,1);
+  assert.equal(await page.evaluate(()=>window.__loads),1);
  }finally{await browser.close();}
 });

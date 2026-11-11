@@ -1,8 +1,13 @@
-# ChatGPT Auto-Continue v0.4.3 — Firefox extension
+# ChatGPT Auto-Continue v0.4.7 — Firefox extension
 
 Per-conversation ChatGPT follow-up automation for Firefox with independent tab jobs, Web Locks to prevent duplicate sends, and durable pre-send receipts.
 
 ## Changes
+- Added per-conversation draft handling: append continuation and send (default), replace draft and send, or preserve draft and pause.
+- Removed the nonempty-composer send block when Append or Replace is configured, without weakening receipt-based duplicate-send protection.
+- Fixed multiline contenteditable draft detection, prevented duplicate continuation suffixes and checked for editor changes before clicking Send.
+- Retained first-party Retry recovery with a nonempty draft without refreshing and losing that text.
+- Added popup and in-page settings plus unit and simulated-browser tests for the new policies. Changing modes can result in sending or discarding an existing unsent draft.
 - Replaced the intrusive always-visible badge with a 34px compact, accessible launcher and a modeless responsive settings panel.
 - Improved light/dark styling, status indicators, keyboard focus, Escape, outside-click behavior, mobile safe-area support and reduced motion.
 - Removed redundant status DOM updates and replaced internal recovery-phase jargon with clear user-facing messages.
@@ -31,7 +36,7 @@ Per-conversation ChatGPT follow-up automation for Firefox with independent tab j
 - Unit, stress, and simulated browser tests for retry, interruption, and multi-tab behavior.
 
 ## Install (development build)
-1. Download and extract `AutoContinue-0.4.3-Firefox.zip` from the GitHub Release assets.
+1. Download and extract `AutoContinue-0.4.7-Firefox.zip` from the GitHub Release assets.
 2. Open `about:debugging#/runtime/this-firefox` in Firefox.
 3. Select **Load Temporary Add-on** and choose the extracted `manifest.json`.
 4. Reload open ChatGPT tabs and enable the extension for each saved conversation.

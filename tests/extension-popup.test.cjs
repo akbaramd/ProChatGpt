@@ -229,3 +229,42 @@ test('toolbar status follows per-chat Enabled state',async()=>{
   await page.waitForFunction(()=>document.getElementById('status').textContent==='Off');
  }finally{await browser.close();}
 });
+test('toolbar draft mode persists and is restored for the same conversation',async()=>{
+ const {browser,page}=await start();
+ try{
+  const field=page.locator('#draftMode');
+  assert.equal(await field.inputValue(),'append');
+  await field.selectOption('replace');
+  await page.waitForFunction(()=>JSON.parse(localStorage.getItem('test-popup-storage')||'{}')
+   ['autoContinue:conversation:/c/12345678-1234-1234-1234-123456789abc']
+   ?.draftMode==='replace');
+  await page.reload();
+  assert.equal(await field.inputValue(),'replace');
+  await field.selectOption('preserve');
+  await page.waitForFunction(()=>JSON.parse(localStorage.getItem('test-popup-storage')||'{}')
+   ['autoContinue:conversation:/c/12345678-1234-1234-1234-123456789abc']
+   ?.draftMode==='preserve');
+ }finally{await browser.close();}
+});
+test('in-page draft mode is selectable and persisted',async()=>{
+ const {browser,page}=await start();
+ try{
+  await page.addScriptTag({path:path.join(extension,'in-page-ui.js')});
+  await page.evaluate(()=>window.__ui=ContinueInPageUI.create({
+   storage:browser.storage.local,
+   onSaved:values=>ContinueConversationSettings.save(browser.storage.local,
+    '/c/12345678-1234-1234-1234-123456789abc',values)
+  }));
+  const host=page.locator('#chatdesk-auto-continue-controls');
+  await host.evaluate(el=>el.shadowRoot.getElementById('launcher').click());
+  await host.evaluate(el=>{
+   const select=el.shadowRoot.getElementById('draftMode');
+   select.value='replace';
+   select.dispatchEvent(new Event('input',{bubbles:true}));
+   el.shadowRoot.getElementById('save').click();
+  });
+  await page.waitForFunction(()=>JSON.parse(localStorage.getItem('test-popup-storage')||'{}')
+   ['autoContinue:conversation:/c/12345678-1234-1234-1234-123456789abc']
+   ?.draftMode==='replace');
+ }finally{await browser.close();}
+});

@@ -78,3 +78,11 @@ test('primary composer wins over an earlier inline edit textbox',()=>{
   [inline,main]:[]};
  assert.equal(core.composerEditor(fallback),main);
 });
+test('literal multiline draft takes precedence over collapsed innerText',()=>{
+ const draft={tagName:'DIV',innerText:'A user draft ادامه بده',
+   textContent:'A user draft\n\nادامه بده'};
+ assert.equal(core.editorText(draft),'A user draft\n\nادامه بده');
+ const markup={tagName:'DIV',innerText:'A user draft\n\nادامه بده',
+   textContent:'A user draftادامه بده'};
+ assert.equal(core.editorText(markup),'A user draft\n\nادامه بده');
+});

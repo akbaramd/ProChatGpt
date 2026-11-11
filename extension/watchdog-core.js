@@ -116,9 +116,18 @@
   }
   function editorText(editor) {
     if(!editor)return '';
-    const raw=/^(TEXTAREA|INPUT)$/.test(editor.tagName||'')?editor.value:
-      (editor.innerText||editor.textContent||'');
-    return normalizeComposerText(raw);
+    if(/^(TEXTAREA|INPUT)$/.test(editor.tagName||''))
+      return normalizeComposerText(editor.value);
+    const visual=normalizeComposerText(editor.innerText||'');
+    const literal=normalizeComposerText(editor.textContent||'');
+    // A literal text node may contain newlines that innerText collapses when
+    // the editor is not yet focused or styled. Preserve them when both texts
+    // otherwise contain identical words. Markup-based editors still prefer
+    // innerText because textContent omits breaks between block elements.
+    if(literal.includes('\n') && !visual.includes('\n') &&
+       literal.replace(/\s+/g,' ')===visual.replace(/\s+/g,' '))
+      return literal;
+    return visual||literal;
   }
   function composerEmpty(doc) {
     const editor=composerEditor(doc);
@@ -492,8 +501,10 @@
     if (c.maxSends > 0 && s.sends >= c.maxSends) { s.dueAt = null; return done('none', 'max-reached'); }
     // Firefox may throttle the polling interval while this tab is hidden.
     // Continue when it wakes; explicit user enablement permits background use.
-    // Never bypass rate limits, a pending response or an unsent user draft.
-    if (!obs.composerEmpty) return done('none', 'skip-draft');
+    // The per-chat draft policy controls whether a prepared draft may be
+    // appended to or replaced. Preserve mode retains the original guard.
+    if (!obs.composerEmpty && c.draftMode!=='append' && c.draftMode!=='replace')
+      return done('none', 'skip-draft');
     if (!obs.canSend) return done('none', 'skip-send-disabled');
 
     if(obs.completedAssistantKey && !s.lastScheduledCompletedKey)

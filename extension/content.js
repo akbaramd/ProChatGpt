@@ -148,6 +148,7 @@
     enabled:cfg.enabled,
     delayMs:Math.max(0,Number(cfg.delaySeconds)||0)*1000,
     maxSends:Number(cfg.maxSends)||0,
+    draftMode:cfg.draftMode,
     // Allow React to acknowledge a sent turn before declaring it unconfirmed.
     verifyWindowMs:12000,
     errorBackoffMs:1800
@@ -264,23 +265,33 @@
   }
 
   function editableText(editor){return core.editorText(editor);}
-  function setComposerText(editor,text){
-    if(!editor || editableText(editor))return false;
+  function setComposerText(editor,text,prior=''){
+    if(!editor || editableText(editor)!==prior)return false;
+    const expected=core.normalizeComposerText(text);
+    if(prior===expected)return true;
+    const append=Boolean(prior && expected.startsWith(prior+'\n'));
     editor.focus();
     if(editor.isContentEditable){
       const range=document.createRange();
       range.selectNodeContents(editor);
+      if(append)range.collapse(false);
       const selection=window.getSelection();
       selection.removeAllRanges();
       selection.addRange(range);
-      const inserted=document.execCommand('insertText',false,text);
-      // Native insertText sends the beforeinput/input sequence Lexical expects.
-      // React can replace the editor synchronously in its input listener.
-      if(!inserted && !editableText(editor) &&
-         !editableText(core.composerEditor(document))){
+      // In contenteditable, inserting a single newline at the end creates
+      // a new paragraph break. Two input newlines become three visual lines.
+      const insert=append?text.slice(prior.length).replace(/^\n\n/,'\n'):text;
+      let inserted=false;
+      try{inserted=document.execCommand('insertText',false,insert);}
+      catch{inserted=false;}
+      // React/Lexical can remount the editor synchronously on beforeinput.
+      // Direct fallback is permitted only if the controlled editor and its
+      // contents still match the snapshot taken before insertion.
+      if(!inserted && editableText(editor)===prior &&
+         core.composerEditor(document)===editor){
         editor.textContent=text;
         editor.dispatchEvent(new InputEvent('input',{
-          bubbles:true,inputType:'insertText',data:text
+          bubbles:true,inputType:'insertText',data:insert
         }));
       }
     }else{
@@ -293,10 +304,8 @@
         bubbles:true,inputType:'insertText',data:text
       }));
     }
-    // Always reacquire the editor: a controlled component may remount on input.
-    return editableText(core.composerEditor(document))===
-        core.normalizeComposerText(text) || editableText(editor)===
-        core.normalizeComposerText(text);
+    return editableText(core.composerEditor(document))===expected ||
+      editableText(editor)===expected;
   }
   async function releaseCompletedStop(){
     const completedKey=core.lastCompletedAssistant(document);
@@ -326,16 +335,22 @@
     if(!submission || currentConversation()!==submission.path ||
        activeSubmission!==submission)return fail('submission-changed');
     let editor=core.composerEditor(document);
-    const expected=core.normalizeComposerText(text);
     if(!editor)return fail('composer-missing');
-    if(editableText(editor) && editableText(editor)!==expected)
-      return fail('user-draft-present');
     if(!await releaseCompletedStop())return fail('stop-not-settled');
     if(!cfg.enabled || !isLeader ||
        currentConversation()!==submission.path)return fail('ownership-changed');
-    if(!editableText(editor))setComposerText(editor,text);
-    // Allow React/Lexical to reconcile the input, replace the editor, and
-    // enable or remount Send. Never overwrite a nonmatching manual draft.
+    editor=core.composerEditor(document);
+    if(!editor)return fail('composer-missing');
+    const original=editableText(editor);
+    const plan=settings.planDraft(original,text,submission.draftMode);
+    if(plan.text==null)return fail(plan.action);
+    const expected=core.normalizeComposerText(plan.text);
+    submission.draftPlan=plan.action;
+    traceEvent('composer-prepared',{action:plan.action,
+      originalLength:original.length,expectedLength:expected.length});
+    if(original!==expected)setComposerText(editor,plan.text,original);
+    // React/Lexical may replace the composer during insertion. Never send
+    // text that differs from the one prepared for this submission.
     const deadline=Date.now()+8000;
     let repairs=0,noticeAt=Date.now()+1200,reason='send-ui-timeout';
     while(Date.now()<deadline){
@@ -352,17 +367,21 @@
       if(!cfg.enabled || !isLeader ||
          currentConversation()!==submission.path ||
          activeSubmission!==submission)return fail('ownership-changed');
+      if(cfg.draftMode!==submission.draftMode ||
+         (cfg.message||'ادامه بده').trim()!==text)
+        return fail('settings-changed');
       if(core.detectGenerating(document)&&!safeReleasedInterruption)
         return fail('generation-resumed');
       editor=core.composerEditor(document);
       if(!editor){reason='composer-missing';await sleep(100);continue;}
       const actual=editableText(editor);
       if(actual!==expected){
-        if(actual)return fail('composer-text-mismatch');
-        // Only repair an empty replacement editor. A human draft is sacrosanct.
+        // Repair an empty replacement editor or one that still has exactly
+        // the original draft. Another mutation may be new user input.
+        if(actual && actual!==original)return fail('composer-text-mismatch');
         if(repairs<2){
           repairs++;
-          setComposerText(editor,text);
+          setComposerText(editor,plan.text,actual);
         }
         reason='composer-not-synchronized';
         await sleep(120);
@@ -418,7 +437,7 @@
     const latest=core.lastVisibleTurn(document);
     const sourceKey=latest?.role==='assistant'?latest.key:state.lastScheduledCompletedKey;
     activeSubmission={path:currentConversation(),before:turnCounts(),
-      sourceKey,at:Date.now()};
+      sourceKey,at:Date.now(),draftMode:cfg.draftMode};
     const submission=activeSubmission;
     const stillHere=()=>currentConversation()===submission.path &&
       configuredPath===submission.path && activeSubmission===submission;
@@ -467,7 +486,7 @@
           composerEmpty:core.composerEmpty(document)
         });
         record('send-not-clicked','none');
-        ui?.updateStatus('Send unavailable; retrying after 15s without replacing your draft');
+        ui?.updateStatus('Send unavailable — trying again in 15 seconds');
         return;
       }
       traceEvent('send-clicked',{phase:'clicked',sends:state.sends});
@@ -589,6 +608,10 @@
       return true;
     }
     const snap=incidentSnapshot(obs);
+    // First-party Retry does not submit or clear a draft; allow it in
+    // append/replace mode without permitting a destructive reload.
+    if(cfg.draftMode!=='preserve'&&core.composerEditor(document))
+      snap.composerEmpty=true;
     const isIncident=incidentState || incidentPolicy.issueOf(snap);
     if(!isIncident)return false;
     const decision=incidentPolicy.transition(incidentState,snap,Date.now());
@@ -656,7 +679,9 @@
       const canAct=()=>path===currentConversation()&&configuredPath===path &&
         cfg.enabled&&isLeader&&!busy&&navigator.onLine!==false&&
         !core.detectRateLimited(document)&&
-        !core.detectConversationMaxed(document)&&core.composerEmpty(document);
+        !core.detectConversationMaxed(document)&&
+        (core.composerEmpty(document)||
+          (decision.action==='retry'&&cfg.draftMode!=='preserve'));
       // Persisted intent is not proof the UI action was performed.
       const defer=async reason=>{
         if(path!==currentConversation()||!cfg.enabled||!isLeader||

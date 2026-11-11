@@ -2,8 +2,8 @@
 (function (global) {
   'use strict';
   const ID='chatdesk-auto-continue-controls';
-  const DEFAULTS={enabled:false,message:'ادامه بده',delaySeconds:3,maxSends:0};
-  const fields=['enabled','message','delaySeconds','maxSends'];
+  const DEFAULTS={enabled:false,message:'ادامه بده',delaySeconds:3,maxSends:0,draftMode:'append'};
+  const fields=['enabled','message','delaySeconds','maxSends','draftMode'];
   function clamp(v,min,max,fallback) {
     const n=Number.parseInt(v,10);
     return Number.isFinite(n)?Math.min(max,Math.max(min,n)):fallback;
@@ -18,7 +18,7 @@
       <style>
         :host {all:initial;color-scheme:light dark}
         *,*:before,*:after{box-sizing:border-box}
-        button,input,textarea{font:inherit}
+        button,input,textarea,select{font:inherit}
         button{cursor:pointer}
         .launcher{position:relative;display:grid;place-items:center;width:34px;height:34px;padding:0;border:1px solid #7777;border-radius:50%;background:#242429e8;color:#f4f4f5;font:600 18px/1 system-ui;box-shadow:0 2px 8px #0003;opacity:.80}
         .launcher:hover,.launcher:focus-visible,.launcher[aria-expanded="true"]{opacity:1;background:#39393e}
@@ -39,7 +39,7 @@
         .row input{width:18px;height:18px;accent-color:#2ecb9d}
         .field{display:block;margin:12px 0}
         .field span{display:block;font-weight:600;margin-bottom:5px}
-        textarea,input[type=number]{width:100%;background:#16161a;color:#fff;border:1px solid #62626a;border-radius:8px;padding:8px}
+        textarea,input[type=number],select{width:100%;background:#16161a;color:#fff;border:1px solid #62626a;border-radius:8px;padding:8px}
         textarea{min-height:70px;resize:vertical;max-height:170px}
         .numbers{display:grid;grid-template-columns:1fr 1fr;gap:11px}
         .save{border:0;border-radius:8px;background:#ededf0;color:#242429;padding:8px 14px;font-weight:700}
@@ -52,14 +52,14 @@
         .runtime p{min-height:16px}
         summary{cursor:pointer;font-size:11.5px;font-weight:600;margin-top:9px}
         .metrics{white-space:pre-wrap}
-        button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #96b6ff;outline-offset:2px}
+        button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid #96b6ff;outline-offset:2px}
         @media(prefers-color-scheme:light){
           .launcher{background:#f7f7f9e8;color:#242429;border-color:#dedee2}
           .launcher:hover,.launcher:focus-visible,.launcher[aria-expanded="true"]{background:#ececf0}
           .dot{border-color:#f7f7f9}
           .panel{background:#fff;color:#232329;border-color:#ddd}
           .intro,.hint,.runtime p,.metrics{color:#686873}
-          textarea,input[type=number]{background:#fafafa;color:#222;border-color:#ccc}
+          textarea,input[type=number],select{background:#fafafa;color:#222;border-color:#ccc}
           .save{background:#26262c;color:#fff}
           .runtime{border-color:#e3e3e7}
         }
@@ -70,11 +70,12 @@
         <p class="intro">Automatic follow-up for the selected ChatGPT conversation.</p>
         <label class="row">Enabled <input type="checkbox" id="enabled" data-testid="continue-enabled"></label>
         <label class="field"><span>Message</span><textarea id="message" dir="auto" maxlength="12000" data-testid="continue-message"></textarea></label>
+        <label class="field"><span>If the composer contains a draft</span><select id="draftMode" data-testid="continue-draft-mode"><option value="append">Append follow-up and send (default)</option><option value="replace">Clear draft, send only follow-up</option><option value="preserve">Keep draft, pause sending</option></select></label>
         <div class="numbers">
           <label class="field"><span>Delay (seconds)</span><input type="number" id="delaySeconds" min="0" max="3600" data-testid="continue-delay"></label>
           <label class="field"><span>Max follow-ups</span><input type="number" id="maxSends" min="0" max="999" data-testid="continue-max"></label>
         </div>
-        <p class="hint">Max 0 = unlimited. Drafts are preserved; Firefox may throttle background timers.</p>
+        <p class="hint">Max 0 = unlimited. Append sends existing draft text as part of the message. Replace discards it. Firefox may throttle background timers.</p>
         <button type="button" class="save" id="save" data-testid="continue-save">Save settings</button>
         <span class="feedback" id="feedback" role="status"></span>
         <div class="runtime"><strong>Status</strong><p id="runtime" aria-live="off" data-testid="continue-status">Disabled</p>
@@ -121,7 +122,8 @@
         enabled:$('enabled').checked,
         message:$('message').value.trim()||DEFAULTS.message,
         delaySeconds:clamp($('delaySeconds').value,0,3600,DEFAULTS.delaySeconds),
-        maxSends:clamp($('maxSends').value,0,999,DEFAULTS.maxSends)
+        maxSends:clamp($('maxSends').value,0,999,DEFAULTS.maxSends),
+        draftMode:['append','replace','preserve'].includes($('draftMode').value)?$('draftMode').value:DEFAULTS.draftMode
       };
       const submittedRevision=revision;
       const submittedScope=typeof getScope==='function'?getScope():null;
@@ -171,7 +173,7 @@
     $('close').addEventListener('click',()=>setOpen(false));
     $('save').addEventListener('click',persist);
     $('enabled').addEventListener('change',()=>{revision++;persist();});
-    for(const key of ['message','delaySeconds','maxSends'])
+    for(const key of ['message','delaySeconds','maxSends','draftMode'])
       $(key).addEventListener('input',()=>{dirty=true;revision++;});
     // The panel is modeless. Clicking in ChatGPT closes it, without stealing
     // keyboard focus or covering native ChatGPT interactions.

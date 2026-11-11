@@ -24,3 +24,26 @@ test('legacy data only migrates to its originally bound conversation',async()=>{
  assert.equal(migrated.config.message,'legacy');assert.equal(migrated.receipt.assistantKey,'old');
 });
 test('uc routes canonicalize to their c conversation',()=>{assert.equal(s.pathFrom('https://chatgpt.com/uc/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),a)});
+test('draft plans append once, replace, preserve, and reuse safely',()=>{
+ const message='ادامه بده';
+ assert.deepEqual(s.planDraft('',message,'append'),{text:message,action:'insert'});
+ assert.deepEqual(s.planDraft('متن من',message,'append'),
+   {text:'متن من\n\n'+message,action:'append'});
+ assert.deepEqual(s.planDraft('متن من\n\n'+message,message,'append'),
+   {text:'متن من\n\n'+message,action:'reuse'});
+ assert.deepEqual(s.planDraft('متن من',message,'replace'),
+   {text:message,action:'replace'});
+ assert.deepEqual(s.planDraft('متن من',message,'preserve'),
+   {text:null,action:'skip-draft'});
+ assert.deepEqual(s.planDraft(message,message,'replace'),
+   {text:message,action:'reuse'});
+});
+test('draft policy persists per chat; unknown values normalize to append',async()=>{
+ const storage=make();
+ await s.save(storage,a,{enabled:true,draftMode:'replace'});
+ await s.save(storage,b,{enabled:true,draftMode:'preserve'});
+ assert.equal((await s.read(storage,a)).config.draftMode,'replace');
+ assert.equal((await s.read(storage,b)).config.draftMode,'preserve');
+ assert.equal(s.normalize({draftMode:'unrecognized'}).draftMode,'append');
+ assert.equal(s.normalize({}).draftMode,'append');
+});

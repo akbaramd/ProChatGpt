@@ -235,3 +235,10 @@ test('conversation maximum length is terminal: never submit another prompt',()=>
   assert.equal(r.state.blocked,true);
   assert.equal(r.state.dueAt,null);
 });
+test('draft policy determines whether a due follow-up may send',()=>{
+ const due={...core.initialState(),dueAt:1000};
+ const occupied={...idle,composerEmpty:false};
+ assert.equal(step(due,occupied,{...CFG,draftMode:'append'},1000).action,'send');
+ assert.equal(step(due,occupied,{...CFG,draftMode:'replace'},1000).action,'send');
+ assert.equal(step(due,occupied,{...CFG,draftMode:'preserve'},1000).reason,'skip-draft');
+});

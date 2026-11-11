@@ -1,12 +1,22 @@
-# ChatGPT Auto-Continue 0.4.6 (Firefox)
+# ChatGPT Auto-Continue 0.4.7 (Firefox)
 
-Per-conversation follow-up automation via the ordinary ChatGPT page UI. Each saved chat has its own Enabled state, follow-up text, delay and send cap. Multiple chats can run in separate tabs; a Web Lock prevents two tabs of the same chat from sending concurrently.
+Per-conversation follow-up automation via the ordinary ChatGPT page UI. Each saved chat has its own Enabled state, follow-up text, delay, send cap, and draft-handling policy. Multiple chats can run in separate tabs; a Web Lock prevents two tabs of the same chat from sending concurrently.
 
 ## Installation
 
 Open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on** and select this folder's `manifest.json`. Reload existing ChatGPT tabs after updating the extension. The temporary add-on must be loaded again after Firefox restarts.
 
 Open each saved conversation (`/c/... ` or `/g/.../c/...`) and enable it individually from the in-page control or the toolbar popup. Unconfigured chats remain Off. `maxSends=0` means unbounded, but live testing should always use a small cap.
+
+## Draft handling
+
+An enabled conversation can now continue even when the ChatGPT composer contains text. Choose the per-chat **When a draft exists** option in the in-page settings or toolbar popup:
+
+- **Append & send (default):** add a separated continuation after the existing text, then click the first-party Send button. The entire text draft becomes part of the submitted message.
+- **Clear draft & send:** replace the composer text with the configured follow-up and send that message. Unsent draft text is discarded.
+- **Preserve draft & pause:** retain the previous behavior; a nonempty editor prevents automatic sending.
+
+The extension rechecks the active editor after React/Lexical remounts, avoids appending the same continuation twice, refuses a mismatched late editor mutation, and retains the durable pre-send receipt. Draft policies do not bypass an active generation, service rate limits, or uncertain message delivery. These modes operate on the **text editor**, not on non-text attachments.
 
 ## Timeout / first-party Retry recovery
 
@@ -27,8 +37,8 @@ When ChatGPT displays an explicit `Message delivery timed out` or `Error in inpu
 - Send is resolved inside the active composer form, and unrelated submit, voice and hidden buttons are rejected. Specific ChatGPT composer selectors take precedence over inline edit boxes.
 - Recovery actions roll back the persisted phase if a draft or page change prevents the intended first-party action; a UI intent is not treated as a completed reload, Stop or Retry.
 - The watchdog observes DOM changes and also polls every 2.5 seconds. Mutation bursts are coalesced, with a slower cadence while answers stream.
-- Composer submission reacquires the active editor after React/Lexical remounts, verifies the entered text, waits up to 8 seconds for Send readiness and reports exact pre-click failure reasons. A missing or replaced editor can be filled again only when empty; existing user drafts are never overwritten.
-- It recognizes multiple conversation DOM families (`data-chatgpt-search-unit-key`, `data-message-author-role`, `section[data-turn]`), composer variants, and send-button IDs. It only sends after a completed assistant turn and preserves unrelated user drafts.
+- Composer submission reacquires the active editor after React/Lexical remounts, verifies the entered text, waits up to 8 seconds for Send readiness and reports exact pre-click failure reasons. A missing or replaced editor is repaired only when still empty or still matching its original snapshot. Other unexpected edits stop the current send. Draft text is handled by the explicit per-conversation Append, Replace or Preserve policy.
+- It recognizes multiple conversation DOM families (`data-chatgpt-search-unit-key`, `data-message-author-role`, `section[data-turn]`), composer variants, and send-button IDs. It only sends after a completed assistant turn, using the configured per-conversation draft policy.
 - Retry and Connection interrupted errors use one persisted incident state machine: observe, refresh once, reconcile, optionally Stop/Retry, and resume only after safe settlement. Unconfirmed user prompts are not resent.
 - Each chat has its own durable send receipt. A receipt is persisted *before* clicking Send so reloads cannot blindly replay the same assistant turn. Unknown delivery remains blocked until a new completed assistant reply is observed.
 - ChatGPT-specific rate limits, usage limits and maximum-conversation-length notices are terminal/wait conditions, not something the extension attempts to bypass.

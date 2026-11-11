@@ -1,5 +1,5 @@
 'use strict';
-const DEFAULTS = { enabled: false, message: 'ادامه بده', delaySeconds: 3, maxSends: 0 };
+const DEFAULTS = { enabled: false, message: 'ادامه بده', delaySeconds: 3, maxSends: 0, draftMode:'append' };
 const $ = (id) => document.getElementById(id);
 let savedTimer = null;
 let saveQueue=Promise.resolve(),saveSequence=0;
@@ -30,7 +30,8 @@ function save() {
     enabled:$('enabled').checked,
     message:$('message').value.trim()||DEFAULTS.message,
     delaySeconds:clamp(parseInt($('delaySeconds').value,10),0,3600,DEFAULTS.delaySeconds),
-    maxSends:clamp(parseInt($('maxSends').value,10),0,999,DEFAULTS.maxSends)
+    maxSends:clamp(parseInt($('maxSends').value,10),0,999,DEFAULTS.maxSends),
+    draftMode:['append','replace','preserve'].includes($('draftMode').value)?$('draftMode').value:DEFAULTS.draftMode
   };
   updateStatus(values.enabled);
   // Serial writes preserve the order of rapid toggle and field changes.
@@ -59,7 +60,7 @@ function clamp(value, min, max, fallback) {
 async function load(){
   activePath=await getActivePath();
   const enabled=!!activePath;
-  for(const id of ['enabled','message','delaySeconds','maxSends'])
+  for(const id of ['enabled','message','delaySeconds','maxSends','draftMode'])
     $(id).disabled=!enabled;
   if($('chatScope'))$('chatScope').textContent=activePath?
     'Settings for '+activePath.slice(3,11)+'…':'Open a saved ChatGPT conversation';
@@ -71,9 +72,10 @@ async function load(){
   $('message').value=cfg.message;
   $('delaySeconds').value=cfg.delaySeconds;
   $('maxSends').value=cfg.maxSends;
+  $('draftMode').value=cfg.draftMode;
 }
 
-for (const id of ['enabled', 'message', 'delaySeconds', 'maxSends']) {
+for (const id of ['enabled', 'message', 'delaySeconds', 'maxSends', 'draftMode']) {
   $(id).addEventListener('change', save);
 }
 
