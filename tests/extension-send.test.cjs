@@ -516,3 +516,114 @@ test('empty replacement editor is repaired without duplicating text or sends',as
     assert.equal(await page.evaluate(()=>window.__sent.length),1);
   }finally{await browser.close();}
 });
+test('a click that sends then throws must never be resent',async()=>{
+ const {browser,page}=await fixture({maxSends:1,delaySeconds:3});
+ try{
+  await page.evaluate(()=>{
+   const btn=document.getElementById('send');
+   btn.click=function(){
+    HTMLElement.prototype.click.call(this);
+    throw Error('failure after first-party click dispatched');
+   };
+  });
+  await waitFor(page,()=>window.__sent.length===1,22000);
+  await waitFor(page,async()=>{
+   const events=(await window.AutoContinueTrace.readAll(browser.storage.local)).events;
+   return events.some(e=>e.event==='send-exception'&&e.phase==='after-click');
+  },16000);
+  await page.waitForTimeout(5000);
+  assert.deepEqual(await page.evaluate(()=>window.__sent),['ادامه بده']);
+  const detail=await page.evaluate(async()=>({
+   events:(await window.AutoContinueTrace.readAll(browser.storage.local)).events,
+   receipt:window.__autoState['autoContinue:conversation:/c/12345678-1234-1234-1234-123456789abc:receipt']
+  }));
+  assert.equal(detail.events.filter(e=>e.event==='send-prepare').length,1);
+  assert.ok(detail.receipt?.assistantKey);
+ }finally{await browser.close();}
+});
+test('rapid SPA navigation cannot let stale Web Lock release cancel new owner',async()=>{
+ const {browser,page}=await fixture({maxSends:1,delaySeconds:60});
+ const first='/c/12345678-1234-1234-1234-123456789abc';
+ const second='/c/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+ try{
+  await page.evaluate(async path=>{
+   await window.ContinueConversationSettings.save(browser.storage.local,path,{
+    enabled:true,message:'B continue',maxSends:1,delaySeconds:60
+   });
+  },second);
+  await waitFor(page,async()=>{
+   const events=(await window.AutoContinueTrace.readAll(browser.storage.local)).events;
+   return events.some(e=>e.event==='leader-acquired');
+  },18000);
+  for(let i=0;i<5;i++){
+   await page.evaluate(path=>history.pushState({},'',path),second);
+   await page.waitForTimeout(450);
+   await page.evaluate(path=>history.pushState({},'',path),first);
+   await page.waitForTimeout(450);
+  }
+  await waitFor(page,()=>document.querySelector('#chatdesk-auto-continue-controls')
+   ?.shadowRoot?.getElementById('runtime')?.textContent
+   ?.includes('Next follow-up in'),18000);
+  await waitFor(page,async()=>{
+   const traces=(await window.AutoContinueTrace.readAll(browser.storage.local)).events;
+   return traces.filter(e=>e.event==='leader-acquired').length>=2;
+  },18000);
+  const traces=await page.evaluate(async()=>(
+   await window.AutoContinueTrace.readAll(browser.storage.local)).events);
+  assert.equal(traces.some(e=>e.event==='send-clicked'),false);
+ }finally{await browser.close();}
+});
+test('incident reload is deferred if a manual draft appears while persisting',async()=>{
+ const {browser,page}=await fixture({error:true,maxSends:1,enableIncident:true});
+ const key='autoContinue:conversation:/c/12345678-1234-1234-1234-123456789abc:incident';
+ try{
+  await waitFor(page,()=>window.__autoState[
+   'autoContinue:conversation:/c/12345678-1234-1234-1234-123456789abc:incident'
+  ]?.phase==='watch',19000);
+  await page.evaluate(()=>{
+   const store=window.browser.storage.local;
+   const original=store.set.bind(store);
+   window.__sabotagedReload=false;
+   store.set=async values=>{
+    const hasReload=Object.entries(values).some(([k,v])=>
+     k.endsWith(':incident')&&v?.phase==='reloaded');
+    await original(values);
+    if(hasReload&&!window.__sabotagedReload){
+     window.__sabotagedReload=true;
+     const ed=document.getElementById('prompt-textarea');
+     ed.textContent='Manual draft';
+     ed.dispatchEvent(new InputEvent('input',{bubbles:true}));
+    }
+   };
+   const rawNow=Date.now.bind(Date);
+   Date.now=()=>rawNow()+Number(localStorage.getItem('__timeOffset')||0);
+  });
+  await advanceIncidentClock(page,90000);
+  await waitFor(page,()=>window.__sabotagedReload,20000);
+  await waitFor(page,()=>window.__autoState[
+   'autoContinue:conversation:/c/12345678-1234-1234-1234-123456789abc:incident'
+  ]?.phase==='watch',16000);
+  assert.equal(await page.evaluate(()=>window.__loads),1);
+  assert.equal(await page.locator('#prompt-textarea').innerText(),'Manual draft');
+  assert.equal(await page.evaluate(()=>window.__sent.length),0);
+ }finally{await browser.close();}
+});
+test('historical in_progress marker cannot block a stable current answer',async()=>{
+ const {browser,page}=await fixture({initiallyGenerating:true,maxSends:1});
+ try{
+  await page.evaluate(()=>{
+   const old=document.createElement('div');
+   old.setAttribute('data-talvt-turn-state','in_progress');
+   const oldMsg=document.createElement('div');
+   oldMsg.setAttribute('data-chatgpt-search-unit-key','historical:assistant');
+   oldMsg.textContent='Old unfinished turn';
+   old.appendChild(oldMsg);
+   document.getElementById('transcript').prepend(old);
+   document.getElementById('stale-stop').remove();
+   document.getElementById('assistant-wrapper')
+    .removeAttribute('data-talvt-turn-state');
+  });
+  await waitFor(page,()=>window.__sent.length===1,26000);
+  assert.deepEqual(await page.evaluate(()=>window.__sent),['ادامه بده']);
+ }finally{await browser.close();}
+});

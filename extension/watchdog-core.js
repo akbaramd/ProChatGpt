@@ -98,9 +98,17 @@
     'button[aria-label="Send message"],button[aria-label="Send Message"],' +
     'button[aria-label="Send"]';
   function composerEditor(doc) {
-    const editors=[...doc.querySelectorAll(EDITORS)];
-    // Prefer the active editor, not a hidden or detached previous instance.
-    return editors.find(visibleEl)||editors.find(e=>e.isConnected!==false)||null;
+    // On long chats there may be multiple contenteditable reply/edit fields.
+    // The main ChatGPT composer is more specific than an inline edit textbox.
+    const primary=[...doc.querySelectorAll(
+      '#prompt-textarea,textarea[name="prompt-textarea"],' +
+      'textarea#mobile-composer-prompt,textarea[data-testid="prompt-textarea"]'
+    )].find(visibleEl);
+    if(primary)return primary;
+    const editors=[...doc.querySelectorAll(EDITORS)].filter(visibleEl);
+    // The bottom-most active fallback editor is normally the ChatGPT composer;
+    // a disconnected or hidden editor must never be selected for submission.
+    return editors.at(-1)||null;
   }
   function normalizeComposerText(value) {
     return String(value||'').replace(/[\u200b-\u200d\u2060\ufeff]/g,'')
@@ -118,16 +126,28 @@
   }
   function sendButton(doc) {
     const editor=composerEditor(doc),form=editor?.closest('form');
-    const selector=SEND_BUTTONS+',button[type="submit"]';
-    const eligible=button=>visibleEl(button) &&
-      !/^(?:start voice|voice|stop|attach|record)$/i.test(
-        (button.getAttribute('aria-label')||'').trim());
-    // A stale Send elsewhere on the page must not win over the active form.
-    const local=form?[...form.querySelectorAll(selector)].filter(eligible):[];
-    const candidates=local.length?local:
-      [...doc.querySelectorAll(SEND_BUTTONS)].filter(eligible);
-    return candidates.find(b=>!b.disabled && b.getAttribute('aria-disabled')!=='true')||
-      candidates[0]||null;
+    const valid=b=>visibleEl(b) && b.type!=='reset' &&
+      !/^(?:start voice(?: mode)?|voice(?: mode)?|stop|attach|record|search)$/i.test(
+        (b.getAttribute('aria-label')||'').trim());
+    const choose=buttons=>{
+      const available=buttons.filter(valid);
+      return available.find(b=>!b.disabled&&
+        b.getAttribute('aria-disabled')!=='true')||available[0]||null;
+    };
+    // Prefer explicit Send controls belonging to this exact composer form.
+    if(form){
+      const known=[...form.querySelectorAll(SEND_BUTTONS)];
+      if(known.length)return choose(known);
+      const submits=[...form.querySelectorAll('button[type="submit"]')]
+        .filter(valid).filter(b=>{
+          const label=(b.getAttribute('aria-label')||b.textContent||'').trim();
+          return !label || /^(?:send(?: message| prompt)?|submit|ارسال(?: پیام)?)$/i.test(label);
+        });
+      // Anonymous submit is safe only when unique to the composer form.
+      if(submits.length===1)return choose(submits);
+      return null;
+    }
+    return choose([...doc.querySelectorAll(SEND_BUTTONS)]);
   }
 
   function canSend(doc) {

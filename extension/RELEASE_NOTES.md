@@ -3,6 +3,12 @@
 Per-conversation ChatGPT follow-up automation for Firefox with independent tab jobs, Web Locks to prevent duplicate sends, and durable pre-send receipts.
 
 ## Changes
+- Historical stale `in_progress` markers no longer prevent completion detection for the latest assistant turn when ChatGPT omits its terminal-state attribute.
+- Prevented duplicate user prompts if a Send click is accepted but its JavaScript handler throws afterward.
+- Fixed a Web Locks ownership race and the old conversation's lock-attempt cooldown leaking into the next conversation.
+- Restricted Send discovery to the active composer form; excluded unrelated submit/voice buttons and inline edit inputs.
+- Fixed persisted recovery state when a planned reload, Stop or Retry cannot actually execute because the UI changed.
+- Added browser and unit regression tests for click-then-throw, rapid chat switching, Submit selection, composer priority and deferred recovery.
 - Fixed Composer text insertion and Send synchronization when React/Lexical remounts the editor or Send button.
 - Added bounded repair for an empty replacement editor, delayed Send readiness, and protection for manual drafts.
 - Improved active-form Send selection, hidden control filtering, and precise failed-send diagnostic reasons.

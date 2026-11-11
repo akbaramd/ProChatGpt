@@ -39,3 +39,42 @@ test('Send selection does not fall back to invisible controls',()=>{
  const dom={querySelectorAll:sel=>sel.includes('#prompt-textarea')?[hidden]:[hidden]};
  assert.equal(core.sendButton(dom),null);
 });
+test('unrelated form submit controls cannot be mistaken for Send',()=>{
+ const doc={defaultView:{getComputedStyle:()=>({display:'block',visibility:'visible'})}};
+ const button=label=>({
+  type:'submit',ownerDocument:doc,isConnected:true,disabled:false,
+  getClientRects:()=>[{}],offsetParent:{},textContent:label,
+  getAttribute:key=>key==='aria-label'?label:null,closest:()=>null
+ });
+ const search=button('Search'),save=button('Save'),voice=button('Start voice mode');
+ const form={querySelectorAll:selector=>
+  selector.startsWith('button[type')?[search,save,voice]:[]};
+ const editor={ownerDocument:doc,isConnected:true,getClientRects:()=>[{}],
+  closest:selector=>selector==='form'?form:null};
+ const dom={querySelectorAll:selector=>selector.includes('#prompt-textarea')?
+  [editor]:[button('Send')]};
+ assert.equal(core.sendButton(dom),null,
+  'do not click a global Send from another form or unrelated local submits');
+});
+test('single anonymous submit in active composer form is supported',()=>{
+ const doc={defaultView:{getComputedStyle:()=>({display:'block',visibility:'visible'})}};
+ const submit={type:'submit',ownerDocument:doc,isConnected:true,disabled:false,
+  textContent:'',getClientRects:()=>[{}],getAttribute:()=>null,closest:()=>null};
+ const form={querySelectorAll:selector=>selector.startsWith('button[type')?[submit]:[]};
+ const editor={ownerDocument:doc,isConnected:true,getClientRects:()=>[{}],
+  closest:selector=>selector==='form'?form:null};
+ const dom={querySelectorAll:selector=>selector.includes('#prompt-textarea')?[editor]:[]};
+ assert.equal(core.sendButton(dom),submit);
+});
+test('primary composer wins over an earlier inline edit textbox',()=>{
+ const win={getComputedStyle:()=>({display:'block',visibility:'visible'})};
+ const mk=()=>({ownerDocument:{defaultView:win},isConnected:true,
+  getClientRects:()=>[{}],offsetParent:{},closest:()=>null});
+ const inline=mk(),main=mk();
+ const dom={querySelectorAll:sel=>sel.includes('textarea[name="prompt-textarea"]')?
+  [main]:[inline,main]};
+ assert.equal(core.composerEditor(dom),main);
+ const fallback={querySelectorAll:sel=>sel.includes('[contenteditable')?
+  [inline,main]:[]};
+ assert.equal(core.composerEditor(fallback),main);
+});

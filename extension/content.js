@@ -68,10 +68,15 @@
   let isLeader=false;
   let leaderRequestPending=false;
   let leaderRelease=null;
+  let leaderToken=null;
   let lastLeaderAttempt=0;
   function relinquishLeader(){
-    if(leaderRelease){const release=leaderRelease;leaderRelease=null;release();}
+    // A released lock's finally may run after a different chat acquired a lock.
+    const release=leaderRelease;
+    leaderRelease=null;
+    leaderToken=null;
     isLeader=false;
+    if(release)release();
   }
   function maintainLeadership(){
     if(!cfg.enabled || !configuredPath ||
@@ -95,14 +100,20 @@
         if(!lock)return;
         if(!cfg.enabled || configuredPath!==lockPath ||
            lockPath!==currentConversation())return;
+        const token={path:lockPath};
+        leaderToken=token;
         isLeader=true;
         traceEvent('leader-acquired',{leader:true,enabled:cfg.enabled});
         record('leader-acquired','none');
         try{await new Promise(resolve=>{leaderRelease=resolve;});}
         finally{
-          isLeader=false;
-          leaderRelease=null;
-          traceEvent('leader-released',{leader:false});
+          if(leaderToken===token){
+            isLeader=false;
+            leaderRelease=null;
+            leaderToken=null;
+          }
+          traceEvent('leader-released',{leader:false,
+            chat:lockPath.split('/').at(-1)?.slice(0,8)});
           record('leader-released','none');
         }
       }).catch(error=>{
@@ -166,6 +177,9 @@
     const path=currentConversation(),serial=++loadSerial;
     if(path!==configuredPath){
       relinquishLeader();
+      // Lock-attempt cooldown belongs to the previous conversation.
+      // A new chat must be able to acquire its own lock immediately.
+      lastLeaderAttempt=0;
       configuredPath=path;
       traceEvent('navigation',{phase:'chat-switch'});
       cfg={...DEFAULTS};
@@ -360,7 +374,10 @@
         if(editableText(core.composerEditor(document))!==expected){
           reason='composer-remounted-before-click';await sleep(100);continue;
         }
+        // Mark possible delivery before calling an event handler that can throw.
+        submission.clickAttempted=true;
         btn.click();
+        submission.clickSucceeded=true;
         return true;
       }
       reason=!btn?'send-button-missing':
@@ -455,8 +472,9 @@
       record(reason,'send',{msgLen:message.length});
       ui?.updateStatus('Sent «'+message.slice(0,40)+'»; waiting for ChatGPT');
     }catch(e){
-      // A post-click exception is ambiguous: never queue a duplicate prompt.
-      if(clicked){
+      // A click can be accepted before dispatch throws. A durable receipt
+      // already exists; never interpret a thrown click handler as no send.
+      if(clicked || submission.clickAttempted){
         if(stillHere())state={...state,blocked:true,sentPending:false,
           awaitingResponse:false,verifyAt:null,dueAt:null};
         traceEvent('send-exception',{phase:'after-click',errorCode:e?.name||'exception'});
@@ -621,6 +639,7 @@
     }
     incidentPending=true;
     const path=currentConversation(),runId=cfg.autoContinueRunId||'legacy';
+    const beforeAction=incidentState;
     const incident={...decision.incident,runId};
     if(decision.action==='hold')incident.phase='hold';
     (async()=>{
@@ -636,12 +655,22 @@
         cfg.enabled&&isLeader&&!busy&&navigator.onLine!==false&&
         !core.detectRateLimited(document)&&
         !core.detectConversationMaxed(document)&&core.composerEmpty(document);
+      // Persisted intent is not proof the UI action was performed.
+      const defer=async reason=>{
+        if(path!==currentConversation()||!cfg.enabled||!isLeader||
+           (cfg.autoContinueRunId||'legacy')!==runId)return;
+        const previous=beforeAction?{...beforeAction,runId}:null;
+        await browser.storage.local.set({[key]:previous});
+        incidentState=previous;
+        traceEvent('incident-action-deferred',{reason,phase:decision.action});
+      };
       if(decision.action==='reload'){
-        if(!canAct()||navigator.onLine===false)return;
+        if(!canAct())return await defer('ui-not-ready');
         await traceEvent('incident-reload',{reason:decision.reason});
+        if(!canAct())return await defer('changed-before-reload');
         location.reload();
       }else if(decision.action==='stop'){
-        if(!canAct())return;
+        if(!canAct())return await defer('ui-not-ready');
         const current=core.observe(document,window);
         const checked=incidentSnapshot(current);
         if(checked.latestAssistantKey!==incident.progressKey ||
@@ -657,14 +686,15 @@
           traceEvent('incident-stop-aborted',{reason:'response-progressed'});
           return;
         }
-        if(!current.hasStopButton || !core.stopButton(document))return;
+        if(!current.hasStopButton || !core.stopButton(document))
+          return await defer('stop-disappeared');
         const btn=core.stopButton(document);
         btn.click();
         traceEvent('incident-stop-clicked',{reason:decision.reason});
       }else if(decision.action==='retry'){
-        if(!canAct())return;
+        if(!canAct())return await defer('ui-not-ready');
         const btn=core.retryButton(document);
-        if(!btn)return;
+        if(!btn)return await defer('retry-disappeared');
         btn.click();
         traceEvent('incident-retry-clicked',{reason:decision.reason});
       }else if(decision.action==='release'||decision.action==='release-partial'){
@@ -715,7 +745,8 @@
           text:obs.latestAssistantText,changedAt:Date.now()};
       }else if(!obs.generating && !obs.errorBanner &&
                !core.stopButton(document) &&
-               !document.querySelector('[data-talvt-turn-state="in_progress"]') &&
+               // Historical in_progress turns are irrelevant. Only the latest
+               // assistant decides whether its answer has settled.
                Date.now()-candidateAnswer.changedAt>=8000){
         obs.completedAssistantKey ||=obs.latestAssistantKey;
       }
