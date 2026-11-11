@@ -47,3 +47,26 @@ test('draft policy persists per chat; unknown values normalize to append',async(
  assert.equal(s.normalize({draftMode:'unrecognized'}).draftMode,'append');
  assert.equal(s.normalize({}).draftMode,'append');
 });
+test('draft planning is idempotent across repeated ticks, reloads and unicode text',()=>{
+ const messages=['ادامه بده','Continue','Continue with the next step'];
+ const drafts=['مرحله قبلی','A paragraph with symbols <>','First line\nSecond line',
+   'A long note '.repeat(50)];
+ for(const message of messages){
+  for(const draft of drafts){
+   const appended=s.planDraft(draft,message,'append');
+   assert.equal(appended.action,'append');
+   for(let tick=0;tick<50;tick++){
+    const again=s.planDraft(appended.text,message,'append');
+    assert.equal(again.action,'reuse');
+    assert.equal(again.text,appended.text);
+    assert.equal(again.text.endsWith(message),true);
+   }
+   assert.deepEqual(s.planDraft(draft,message,'replace'),{
+    text:message,action:'replace'
+   });
+   assert.deepEqual(s.planDraft(draft,message,'preserve'),{
+    text:null,action:'skip-draft'
+   });
+  }
+ }
+});
