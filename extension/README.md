@@ -1,4 +1,4 @@
-# ChatGPT Auto-Continue 0.4.7 (Firefox)
+# ChatGPT Auto-Continue 0.4.8 (Firefox)
 
 Per-conversation follow-up automation via the ordinary ChatGPT page UI. Each saved chat has its own Enabled state, follow-up text, delay, send cap, and draft-handling policy. Multiple chats can run in separate tabs; a Web Lock prevents two tabs of the same chat from sending concurrently.
 
@@ -7,6 +7,13 @@ Per-conversation follow-up automation via the ordinary ChatGPT page UI. Each sav
 Open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on** and select this folder's `manifest.json`. Reload existing ChatGPT tabs after updating the extension. The temporary add-on must be loaded again after Firefox restarts.
 
 Open each saved conversation (`/c/... ` or `/g/.../c/...`) and enable it individually from the in-page control or the toolbar popup. Unconfigured chats remain Off. `maxSends=0` means unbounded, but live testing should always use a small cap.
+
+## Cross-conversation consistency
+
+- An in-page settings write finishing after navigation may persist for its original chat but cannot re-enable or reconfigure the newly opened chat.
+- Web Locks requests have independent attempt tokens. A delayed callback from another conversation cannot release the current owner's lock; pending attempts expire after 20 seconds and are retried with bounded cooldown.
+- Synchronous and asynchronous Web Locks failures are caught and logged without leaving the extension permanently pending.
+- Browser tests now explicitly await asynchronous predicates to avoid false-positive success before storage and trace updates settle.
 
 ## Draft handling
 

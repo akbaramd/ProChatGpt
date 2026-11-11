@@ -10,7 +10,8 @@ async function fixture({error=false,staleStop=false,initiallyGenerating=false,pr
   maxSends=1,delaySeconds=0,targetConversation=null,interrupted=false,
   stuckProgressAfterStop=false,initialReceipt=null,oldError=false,maxed=false,domVariant=null,urlVariant=null,enableIncident=false,
   remountEditor=false,remountEmptyEditor=false,remountSend=false,delayedSend=false,
-  timeoutError=false,staleInProgressNoStop=false,initialDraft='',draftMode='append'}={}){
+  timeoutError=false,staleInProgressNoStop=false,initialDraft='',draftMode='append',
+  delayInitialWebLock=false,throwFirstWebLock=false}={}){
   const browser=await chromium.launch({channel:'msedge',headless:true,chromiumSandbox:true});
   const context=await browser.newContext();
   await context.addInitScript(({maxSends,delaySeconds,targetConversation,initialReceipt,draftMode})=>{
@@ -138,6 +139,34 @@ async function fixture({error=false,staleStop=false,initiallyGenerating=false,pr
   }));
   const page=await context.newPage();
   await page.goto(urlVariant||conversation);
+  if(delayInitialWebLock)await page.evaluate(()=>{
+    const locks=navigator.locks;
+    const original=locks.request.bind(locks);
+    let intercepted=false;
+    Object.defineProperty(locks,'request',{configurable:true,value:(name,options,callback)=>{
+      if(!intercepted && name.includes('12345678-1234-1234-1234-123456789abc')){
+        intercepted=true;
+        window.__heldLockRequest=true;
+        return new Promise(resolve=>{
+          window.__releaseOldLock=()=>resolve(original(name,options,callback));
+        });
+      }
+      return original(name,options,callback);
+    }});
+  });
+  if(throwFirstWebLock)await page.evaluate(()=>{
+    const locks=navigator.locks;
+    const original=locks.request.bind(locks);
+    let thrown=false;
+    Object.defineProperty(locks,'request',{configurable:true,value:(...args)=>{
+      if(!thrown){
+        thrown=true;
+        window.__lockThrewOnce=true;
+        throw new TypeError('temporary Web Locks failure');
+      }
+      return original(...args);
+    }});
+  });
   if(preparedDraft)await page.evaluate(()=>{
     const editor=document.getElementById('prompt-textarea');
     editor.textContent='ادامه بده';
@@ -188,6 +217,18 @@ async function fixture({error=false,staleStop=false,initiallyGenerating=false,pr
 }
 async function waitFor(page,condition,timeout=13000){
   try{
+    // Playwright treats a Promise returned from waitForFunction as truthy on
+    // some runtimes. Await async predicates explicitly or tests pass early.
+    if(condition.constructor.name==='AsyncFunction'){
+      const deadline=Date.now()+timeout;
+      let lastError=null;
+      while(Date.now()<deadline){
+        try{if(await page.evaluate(condition))return;}
+        catch(error){lastError=error;}
+        await page.waitForTimeout(150);
+      }
+      throw lastError||Error('Async browser predicate timed out');
+    }
     await page.waitForFunction(condition,null,{timeout,polling:150});
   }catch(error){
     const debug=await page.evaluate(async()=>({
@@ -685,5 +726,105 @@ test('first-party Retry works with a nonempty draft, then appends exactly once',
   assert.match(messages[0],/^Unsent notes\s+ادامه بده$/);
   assert.equal((messages[0].match(/ادامه بده/g)||[]).length,1);
   assert.equal(await page.evaluate(()=>window.__loads),1);
+ }finally{await browser.close();}
+});
+test('save finishing after SPA navigation cannot re-enable automation for the new chat',async()=>{
+ const {browser,page}=await fixture({maxSends:1,delaySeconds:60});
+ const other='/c/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+ const old='/c/12345678-1234-1234-1234-123456789abc';
+ try{
+  await page.evaluate(()=>{
+   const storage=browser.storage.local;
+   const original=storage.set.bind(storage);
+   window.__pausedSave=false;
+   window.__releaseSave=()=>{};
+   storage.set=async values=>{
+    if(values['autoContinue:conversation:/c/12345678-1234-1234-1234-123456789abc']?.message==='Saved only for old chat' && !window.__pausedSave){
+     window.__pausedSave=true;
+     await new Promise(resolve=>{window.__releaseSave=resolve;});
+    }
+    return original(values);
+   };
+   const host=document.getElementById('chatdesk-auto-continue-controls');
+   const ui=host.shadowRoot;
+   ui.getElementById('launcher').click();
+   const message=ui.getElementById('message');
+   message.value='Saved only for old chat';
+   message.dispatchEvent(new Event('input',{bubbles:true}));
+   ui.getElementById('save').click();
+  });
+  await waitFor(page,()=>window.__pausedSave===true,12000);
+  await page.evaluate(path=>history.pushState({},'',path),other);
+  await waitFor(page,()=>{
+   const host=document.getElementById('chatdesk-auto-continue-controls');
+   return host?.shadowRoot.getElementById('short')?.textContent==='Off';
+  },14000);
+  await page.evaluate(()=>window.__releaseSave());
+  await page.waitForTimeout(2300);
+  const actual=await page.evaluate(async({other,old})=>{
+   const oldConfig=(await browser.storage.local.get({
+    ['autoContinue:conversation:'+old]:null
+   }))['autoContinue:conversation:'+old];
+   const newConfig=(await browser.storage.local.get({
+    ['autoContinue:conversation:'+other]:null
+   }))['autoContinue:conversation:'+other];
+   const host=document.getElementById('chatdesk-auto-continue-controls');
+   return {oldConfig,newConfig,short:host.shadowRoot.getElementById('short').textContent};
+  },{other,old});
+  assert.equal(actual.oldConfig?.message,'Saved only for old chat');
+  assert.equal(actual.newConfig?.enabled??false,false);
+  assert.equal(actual.short,'Off','late old-chat save must not re-arm the new chat');
+  assert.deepEqual(await page.evaluate(()=>window.__sent),[]);
+ }finally{await browser.close();}
+});
+test('stalled old-chat Web Lock request cannot starve or revoke the new chat',async()=>{
+ const {browser,page}=await fixture({maxSends:1,delaySeconds:60,delayInitialWebLock:true});
+ const other='/c/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+ try{
+  await waitFor(page,()=>window.__heldLockRequest===true,12000);
+  await page.evaluate(async path=>{
+    await browser.storage.local.set({
+     ['autoContinue:conversation:'+path]:{
+      enabled:true,message:'continue next',delaySeconds:60,maxSends:1,
+      autoContinueRunId:'test-second-chat',draftMode:'preserve'
+     }
+    });
+    history.pushState({},'',path);
+  },other);
+  await waitFor(page,async()=>{
+   const traces=(await window.AutoContinueTrace.readAll(browser.storage.local)).events;
+   return traces.some(event=>event.event==='leader-acquired'&&event.chat==='bbbbbbbb');
+  },17000);
+  await page.evaluate(()=>window.__releaseOldLock());
+  await page.waitForTimeout(3000);
+  const events=await page.evaluate(async()=>
+   (await window.AutoContinueTrace.readAll(browser.storage.local)).events);
+  const acquired=events.filter(event=>
+   event.event==='leader-acquired'&&event.chat==='bbbbbbbb');
+  const released=events.filter(event=>
+   event.event==='leader-released'&&event.chat==='bbbbbbbb');
+  assert.ok(acquired.length>=1);
+  assert.equal(released.length,0,'old request must not release the new owner');
+  assert.deepEqual(await page.evaluate(()=>window.__sent),[]);
+ }finally{await browser.close();}
+});
+test('synchronous Web Locks failure recovers without a permanent pending state',async()=>{
+ const {browser,page}=await fixture({
+  maxSends:1,delaySeconds:60,throwFirstWebLock:true
+ });
+ try{
+  await waitFor(page,()=>window.__lockThrewOnce===true,12000);
+  await waitFor(page,()=>{
+   const entries=Object.entries(window.__autoState)
+    .filter(([key,value])=>key.startsWith('autoContinue:trace:') &&
+      Array.isArray(value?.events));
+   return entries.some(([,value])=>value.events.some(e=>
+    e.event==='leader-acquired'&&e.chat==='12345678'));
+  },20000);
+  const events=await page.evaluate(async()=>(
+   await window.AutoContinueTrace.readAll(browser.storage.local)).events);
+  assert.ok(events.some(e=>e.event==='leader-error'));
+  assert.ok(events.some(e=>e.event==='leader-acquired'));
+  assert.deepEqual(await page.evaluate(()=>window.__sent),[]);
  }finally{await browser.close();}
 });

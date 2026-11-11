@@ -67,6 +67,7 @@
   // Web Locks provide atomic ownership across tabs in the same origin.
   let isLeader=false;
   let leaderRequestPending=false;
+  let leaderAttemptToken=null;
   let leaderRelease=null;
   let leaderToken=null;
   let lastLeaderAttempt=0;
@@ -75,6 +76,8 @@
     const release=leaderRelease;
     leaderRelease=null;
     leaderToken=null;
+    leaderAttemptToken=null;
+    leaderRequestPending=false;
     isLeader=false;
     if(release)release();
   }
@@ -83,6 +86,13 @@
        configuredPath!==currentConversation()){
       relinquishLeader();
       return;
+    }
+    // A browser lock request may remain unresolved while a tab is suspended.
+    // Retire the attempt after a bounded wait; its eventual callback is stale.
+    if(leaderRequestPending && Date.now()-lastLeaderAttempt>20000){
+      leaderRequestPending=false;
+      leaderAttemptToken=null;
+      traceEvent('leader-attempt-expired',{reason:'lock-request-timeout'});
     }
     if(isLeader || leaderRequestPending ||
        Date.now()-lastLeaderAttempt<6000)return;
@@ -93,10 +103,18 @@
     }
     leaderRequestPending=true;
     const lockPath=configuredPath;
+    const attempt={path:lockPath};
+    leaderAttemptToken=attempt;
     traceEvent('leader-attempt',{reason:'web-lock',enabled:cfg.enabled});
-    navigator.locks.request('prochatgpt-auto-continue:'+lockPath,
+    // The browser API may throw synchronously (e.g. during shutdown).
+    // Route both synchronous errors and rejected requests through one handler.
+    Promise.resolve().then(()=>navigator.locks.request('prochatgpt-auto-continue:'+lockPath,
       {ifAvailable:true},async lock=>{
+        // A request from an old conversation must not invalidate current
+        // ownership, even if the user has navigated A -> B -> A again.
+        if(leaderAttemptToken!==attempt)return;
         leaderRequestPending=false;
+        leaderAttemptToken=null;
         if(!lock)return;
         if(!cfg.enabled || configuredPath!==lockPath ||
            lockPath!==currentConversation())return;
@@ -116,8 +134,11 @@
             chat:lockPath.split('/').at(-1)?.slice(0,8)});
           record('leader-released','none');
         }
-      }).catch(error=>{
+      })).catch(error=>{
+        if(leaderAttemptToken!==attempt)return;
         leaderRequestPending=false;
+        leaderAttemptToken=null;
+        traceEvent('leader-error',{errorCode:error?.name||'LockError'});
         record('leader-error','none');
         ui?.updateStatus('Exclusive browser lock unavailable: '+error.message);
       });
@@ -127,8 +148,12 @@
   async function saveConfig(values,path=currentConversation()){
     if(!path || path!==currentConversation() || configuredPath!==path)
       throw Error('Conversation changed before saving');
+    const serial=loadSerial;
     const next=await settings.save(browser.storage.local,path,values);
-    applyConfig(next);
+    // A storage write may complete after SPA navigation. Its result is valid
+    // for the old chat, but must NEVER re-enable or arm the new chat.
+    if(serial===loadSerial && path===configuredPath &&
+       path===currentConversation())applyConfig(next);
     return next;
   }
   async function exportTrace(){
