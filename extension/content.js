@@ -124,9 +124,9 @@
   }
   addEventListener('pagehide',relinquishLeader);
 
-  async function saveConfig(values){
-    const path=currentConversation();
-    if(!path || configuredPath!==path)throw Error('Open a saved conversation first');
+  async function saveConfig(values,path=currentConversation()){
+    if(!path || path!==currentConversation() || configuredPath!==path)
+      throw Error('Conversation changed before saving');
     const next=await settings.save(browser.storage.local,path,values);
     applyConfig(next);
     return next;
@@ -138,7 +138,8 @@
   }
   const ui=window.ContinueInPageUI?.create({
     storage:browser.storage.local,defaults:DEFAULTS,
-    onSaved:saveConfig,readActivity:log?.read,onExport:exportTrace
+    onSaved:saveConfig,getScope:currentConversation,
+    readActivity:log?.read,onExport:exportTrace
   })||null;
 
   const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -176,6 +177,7 @@
   async function loadConfig(){
     const path=currentConversation(),serial=++loadSerial;
     if(path!==configuredPath){
+      ui?.resetForNavigation?.();
       relinquishLeader();
       // Lock-attempt cooldown belongs to the previous conversation.
       // A new chat must be able to acquire its own lock immediately.
@@ -827,7 +829,19 @@
     }
     const sec=state.dueAt==null?null:Math.max(0,Math.ceil((state.dueAt-Date.now())/1000));
     let message='Armed — waiting for a response';
-    if(reason?.startsWith('incident-'))message='Recovering ChatGPT incident — '+reason.slice(9).replace(/-/g,' ');
+    if(reason?.startsWith('incident-')){
+      // UI copy is user-facing; internal state names belong only in diagnostics.
+      const step=reason.slice(9);
+      if(/(?:hold|expired|unconfirmed|manual|service-limit)/.test(step))
+        message='Paused — recovery could not be confirmed';
+      else if(/retry/.test(step))
+        message='Retrying the failed response';
+      else if(/(?:refresh|reload)/.test(step))
+        message='Reconnecting to ChatGPT';
+      else if(/stop/.test(step))
+        message='Finishing an interrupted response';
+      else message='Waiting for ChatGPT to recover';
+    }
     else if(reason==='rate-limited')message='Rate limited — waiting';
     else if(reason==='retry-error'||reason==='awaiting-error-recovery')message='Recovering ChatGPT error using Retry';
     else if(reason==='generating'||state.sentPending||state.awaitingResponse)message='Waiting for ChatGPT response';

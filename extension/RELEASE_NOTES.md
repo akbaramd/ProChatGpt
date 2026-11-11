@@ -3,6 +3,11 @@
 Per-conversation ChatGPT follow-up automation for Firefox with independent tab jobs, Web Locks to prevent duplicate sends, and durable pre-send receipts.
 
 ## Changes
+- Replaced the intrusive always-visible badge with a 34px compact, accessible launcher and a modeless responsive settings panel.
+- Improved light/dark styling, status indicators, keyboard focus, Escape, outside-click behavior, mobile safe-area support and reduced motion.
+- Removed redundant status DOM updates and replaced internal recovery-phase jargon with clear user-facing messages.
+- Protected unsaved form edits against storage updates, serialized saves, and prevented pending writes from applying to another conversation after navigation.
+- Refined the toolbar popup and added accessibility, viewport, focus and settings-race regression tests.
 - Prioritized ChatGPT's visible first-party Retry button for `Message delivery timed out` and `Error in input stream`; no unnecessary Refresh before the first Retry.
 - Removed a progress-quiescence requirement that could indefinitely postpone Retry when a failing response's DOM/status kept changing.
 - Handles a stale `in_progress` marker when a timeout Retry is available without an active Stop control.

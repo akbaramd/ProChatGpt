@@ -1,4 +1,4 @@
-# ChatGPT Auto-Continue 0.4.5 (Firefox)
+# ChatGPT Auto-Continue 0.4.6 (Firefox)
 
 Per-conversation follow-up automation via the ordinary ChatGPT page UI. Each saved chat has its own Enabled state, follow-up text, delay and send cap. Multiple chats can run in separate tabs; a Web Lock prevents two tabs of the same chat from sending concurrently.
 
@@ -11,6 +11,14 @@ Open each saved conversation (`/c/... ` or `/g/.../c/...`) and enable it individ
 ## Timeout / first-party Retry recovery
 
 When ChatGPT displays an explicit `Message delivery timed out` or `Error in input stream` error with its own Retry button, wait a short safety grace period, click the first-party Retry (not Send), confirm recovery, and continue only after a new completed assistant response. This does not depend on transient assistant text remaining unchanged. A stale `in_progress` marker without a Stop button does not prevent Retry. Attempts and refreshes are bounded; unresolved delivery is never blindly resubmitted.
+
+## Quiet interface and accessibility
+
+- The in-page control is a small 34px circular launcher, positioned in the bottom-right safe area. It opens a modeless settings panel only on demand and does not steal focus when clicked outside.
+- The launcher uses a restrained state indicator and a descriptive accessible label. Full status and diagnostics remain inside the panel; recovery phases use user-readable labels.
+- Identical status messages do not rewrite the DOM. The settings panel fits mobile viewports, supports keyboard focus and Escape, and respects reduced-motion preferences.
+- Unsaved edits are not overwritten by background configuration refreshes. Saves run in order and are tied to the current conversation; navigation cancels stale pending saves.
+- The toolbar popup uses the same compact visual language and serializes quick setting changes.
 
 ## Reliability model
 

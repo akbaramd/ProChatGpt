@@ -2,6 +2,11 @@
 const DEFAULTS = { enabled: false, message: 'ادامه بده', delaySeconds: 3, maxSends: 0 };
 const $ = (id) => document.getElementById(id);
 let savedTimer = null;
+let saveQueue=Promise.resolve(),saveSequence=0;
+function updateStatus(enabled){
+  $('status').textContent=enabled?'On':'Off';
+  $('status').dataset.on=String(!!enabled);
+}
 
 function flash(text) {
   $('saved').textContent = text;
@@ -18,16 +23,32 @@ async function getActivePath(){
     return settings.pathFrom(tab?.url||'');
   }catch{return null;}
 }
-async function save() {
-  if(!activePath){flash('Open a saved ChatGPT conversation');return;}
+function save() {
+  if(!activePath){flash('Open a saved ChatGPT conversation');return Promise.resolve(false);}
+  const path=activePath,sequence=++saveSequence;
   const values={
     enabled:$('enabled').checked,
     message:$('message').value.trim()||DEFAULTS.message,
     delaySeconds:clamp(parseInt($('delaySeconds').value,10),0,3600,DEFAULTS.delaySeconds),
     maxSends:clamp(parseInt($('maxSends').value,10),0,999,DEFAULTS.maxSends)
   };
-  try{await settings.save(browser.storage.local,activePath,values);flash('Saved for this chat');}
-  catch(error){flash('Could not save: '+error.message);}
+  updateStatus(values.enabled);
+  // Serial writes preserve the order of rapid toggle and field changes.
+  saveQueue=saveQueue.catch(()=>{}).then(async()=>{
+    try{
+      await settings.save(browser.storage.local,path,values);
+      if(sequence===saveSequence)flash('Saved for this chat');
+      return true;
+    }catch(error){
+      if(sequence===saveSequence){
+        flash('Could not save: '+error.message);
+        const previous=await settings.read(browser.storage.local,path);
+        updateStatus(previous.config?.enabled);
+      }
+      return false;
+    }
+  });
+  return saveQueue;
 }
 
 function clamp(value, min, max, fallback) {
@@ -46,6 +67,7 @@ async function load(){
     {config:DEFAULTS};
   const cfg={...DEFAULTS,...result.config};
   $('enabled').checked=cfg.enabled;
+  updateStatus(cfg.enabled);
   $('message').value=cfg.message;
   $('delaySeconds').value=cfg.delaySeconds;
   $('maxSends').value=cfg.maxSends;

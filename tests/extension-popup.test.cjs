@@ -117,3 +117,115 @@ test('Export diagnostics requests a background download',async()=>{
   assert.match(await page.locator('#saved').textContent(),/Saved to Downloads/);
  }finally{await browser.close();}
 });
+test('floating control stays compact and its panel fits a narrow viewport',async()=>{
+ const {browser,page}=await start();
+ try{
+  await page.setViewportSize({width:375,height:667});
+  await page.addScriptTag({path:path.join(extension,'in-page-ui.js')});
+  await page.evaluate(()=>window.__ui=ContinueInPageUI.create({storage:browser.storage.local}));
+  const host=page.locator('#chatdesk-auto-continue-controls');
+  const rect=await host.evaluate(el=>{
+   const r=el.shadowRoot.getElementById('launcher').getBoundingClientRect();
+   return {width:r.width,height:r.height,right:r.right,bottom:r.bottom};
+  });
+  assert.ok(rect.width<=40 && rect.height<=40);
+  assert.ok(rect.right<=375 && rect.bottom<=667);
+  await host.evaluate(el=>el.shadowRoot.getElementById('launcher').click());
+  const panel=await host.evaluate(el=>{
+   const p=el.shadowRoot.getElementById('settings').getBoundingClientRect();
+   return {left:p.left,right:p.right,top:p.top,bottom:p.bottom};
+  });
+  assert.ok(panel.left>=0 && panel.right<=375 && panel.top>=0 && panel.bottom<=667,
+   JSON.stringify(panel));
+  await page.evaluate(()=>{
+   const input=document.createElement('input');
+   input.id='native-editor';input.style.cssText='position:fixed;top:24px;left:16px;width:140px;height:34px;z-index:2';
+   document.body.appendChild(input);
+  });
+  await page.mouse.click(40,40);
+  assert.equal(await host.evaluate(el=>el.shadowRoot.getElementById('settings').hidden),true);
+  await page.keyboard.type('Typing remains focused');
+  assert.equal(await page.locator('#native-editor').inputValue(),'Typing remains focused');
+ }finally{await browser.close();}
+});
+test('repeated identical status does not cause needless DOM updates',async()=>{
+ const {browser,page}=await start();
+ try{
+  await page.addScriptTag({path:path.join(extension,'in-page-ui.js')});
+  const count=await page.evaluate(async()=>{
+   const ui=ContinueInPageUI.create({storage:browser.storage.local});
+   const status=ui.shadow.getElementById('runtime');
+   let changes=0;
+   const observer=new MutationObserver(records=>{changes+=records.length;});
+   observer.observe(status,{childList:true,characterData:true,subtree:true});
+   for(let i=0;i<15;i++)ui.updateStatus('Waiting for ChatGPT response');
+   await new Promise(resolve=>setTimeout(resolve,0));
+   observer.disconnect();
+   return changes;
+  });
+  assert.equal(count,1);
+ }finally{await browser.close();}
+});
+test('storage refresh preserves unsaved settings, and Save persists the user edit',async()=>{
+ const {browser,page}=await start();
+ try{
+  await page.addScriptTag({path:path.join(extension,'in-page-ui.js')});
+  await page.evaluate(()=>window.__ui=ContinueInPageUI.create({
+   storage:browser.storage.local,defaults:{enabled:true,message:'ادامه بده',delaySeconds:3,maxSends:1},
+   onSaved:values=>ContinueConversationSettings.save(browser.storage.local,
+    '/c/12345678-1234-1234-1234-123456789abc',values)
+  }));
+  const host=page.locator('#chatdesk-auto-continue-controls');
+  await host.evaluate(el=>el.shadowRoot.getElementById('launcher').click());
+  await host.evaluate(el=>{
+   const text=el.shadowRoot.getElementById('message');
+   text.value='Keep this unsaved text';
+   text.dispatchEvent(new Event('input',{bubbles:true}));
+   window.__ui.updateConfig({enabled:true,message:'from external storage',delaySeconds:8,maxSends:2});
+  });
+  assert.equal(await host.evaluate(el=>el.shadowRoot.getElementById('message').value),
+   'Keep this unsaved text');
+  await host.evaluate(el=>el.shadowRoot.getElementById('save').click());
+  await page.waitForFunction(()=>JSON.parse(localStorage.getItem('test-popup-storage')||'{}')
+   ['autoContinue:conversation:/c/12345678-1234-1234-1234-123456789abc']
+   ?.message==='Keep this unsaved text');
+ }finally{await browser.close();}
+});
+test('pending settings save never writes into a different conversation',async()=>{
+ const {browser,page}=await start();
+ try{
+  await page.addScriptTag({path:path.join(extension,'in-page-ui.js')});
+  const values=await page.evaluate(async()=>{
+   let current='/c/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+   let writes=0;
+   const ui=ContinueInPageUI.create({
+    storage:browser.storage.local,getScope:()=>current,
+    onSaved:async()=>{writes++;}
+   });
+   ui.setOpen(true);
+   const message=ui.shadow.getElementById('message');
+   message.value='Do not save into new chat';
+   message.dispatchEvent(new Event('input',{bubbles:true}));
+   ui.shadow.getElementById('save').click();
+   current='/c/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+   ui.resetForNavigation();
+   ui.updateConfig({enabled:false,message:'new chat',delaySeconds:3,maxSends:1});
+   await new Promise(resolve=>setTimeout(resolve,100));
+   return {writes,text:message.value,hidden:ui.shadow.getElementById('settings').hidden};
+  });
+  assert.equal(values.writes,0);
+  assert.equal(values.text,'new chat');
+  assert.equal(values.hidden,true);
+ }finally{await browser.close();}
+});
+test('toolbar status follows per-chat Enabled state',async()=>{
+ const {browser,page}=await start();
+ try{
+  await page.waitForFunction(()=>document.getElementById('status').textContent==='Off');
+  await page.locator('.switch').click({position:{x:36,y:12}});
+  await page.waitForFunction(()=>document.getElementById('status').textContent==='On');
+  assert.equal(await page.locator('#status').getAttribute('data-on'),'true');
+  await page.locator('.switch').click({position:{x:8,y:12}});
+  await page.waitForFunction(()=>document.getElementById('status').textContent==='Off');
+ }finally{await browser.close();}
+});
